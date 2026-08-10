@@ -1,0 +1,268 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ─────────────────────────────────────────────────────
+
+enum Role {
+  ADMINISTRATEUR
+  TRESORERIE
+  CONTROLE_INTERNE
+  GERANTE
+}
+
+enum Quart {
+  MATIN
+  SOIR
+  NUIT
+}
+
+enum StatutCompte {
+  ACTIF
+  INACTIF
+}
+
+enum StatutPompiste {
+  ACTIF
+  INACTIF
+}
+
+enum StatutStation {
+  EN_SERVICE
+  HORS_SERVICE
+}
+
+enum StatutBanque {
+  ACTIF
+  INACTIF
+}
+
+enum DenominationType {
+  BILLET
+  PIECE
+}
+
+enum StatutDeposit {
+  VALIDE
+}
+
+enum CategorieAudit {
+  CONNEXION
+  ENCAISSEMENT
+  VERSEMENT
+  CODE
+  UTILISATEUR
+  STATION
+  BANQUE
+  POMPISTE
+}
+
+// ── Auth / RBAC ──────────────────────────────────────────────
+
+model User {
+  id                String       @id @default(cuid())
+  identifiant       String       @unique
+  email             String       @unique
+  passwordHash      String
+  prenom            String
+  nom               String
+  telephone         String?
+  role              Role
+  statut            StatutCompte @default(ACTIF)
+  stationId         String?
+  station           Station?     @relation(fields: [stationId], references: [id])
+  derniereConnexion DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  refreshTokens         RefreshToken[]
+  depositCodesGenerated DepositCode[]  @relation("GeneratedBy")
+  depositsValidated     Deposit[]      @relation("ValidatedBy")
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  @@map("refresh_tokens")
+  @@index([userId])
+}
+
+// ── Référentiel ──────────────────────────────────────────────
+
+model Station {
+  id      String        @id @default(cuid())
+  code    String        @unique
+  nom     String
+  ville   String
+  adresse String
+  statut  StatutStation @default(EN_SERVICE)
+
+  quartMatinDebut String @default("06:00")
+  quartMatinFin   String @default("14:00")
+  quartSoirDebut  String @default("14:00")
+  quartSoirFin    String @default("22:00")
+  quartNuitDebut  String @default("22:00")
+  quartNuitFin    String @default("06:00")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users        User[]
+  attendants   Attendant[]
+  cashEntries  CashEntry[]
+  depositCodes DepositCode[]
+  deposits     Deposit[]
+  auditLogs    AuditLog[]
+
+  @@map("stations")
+}
+
+model Attendant {
+  id        String         @id @default(cuid())
+  nom       String
+  prenom    String
+  telephone String
+  embauche  DateTime
+  quart     Quart
+  statut    StatutPompiste @default(ACTIF)
+  stationId String
+  station   Station        @relation(fields: [stationId], references: [id])
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  cashEntries CashEntry[]
+
+  @@map("attendants")
+  @@index([stationId])
+}
+
+model Bank {
+  id      String       @id @default(cuid())
+  code    String       @unique
+  nom     String
+  type    String
+  swift   String
+  contact String
+  statut  StatutBanque @default(ACTIF)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  depositCodes DepositCode[]
+  deposits     Deposit[]
+
+  @@map("banks")
+}
+
+// ── Encaissements (Phase 1 — schéma présent dès maintenant) ──
+
+model CashEntry {
+  id           String    @id @default(cuid())
+  attendantId  String
+  attendant    Attendant @relation(fields: [attendantId], references: [id])
+  stationId    String
+  station      Station   @relation(fields: [stationId], references: [id])
+  quart        Quart
+  totalBillets Decimal   @db.Decimal(14, 2)
+  totalPieces  Decimal   @db.Decimal(14, 2)
+  montant      Decimal   @db.Decimal(14, 2)
+  date         DateTime  @default(now())
+
+  denominations Denomination[]
+
+  @@map("cash_entries")
+  @@index([stationId, date])
+}
+
+model Denomination {
+  id            String           @id @default(cuid())
+  cashEntryId   String
+  cashEntry     CashEntry        @relation(fields: [cashEntryId], references: [id])
+  type          DenominationType
+  valeurFaciale Decimal          @db.Decimal(10, 2)
+  quantite      Int
+  sousTotal     Decimal          @db.Decimal(14, 2)
+
+  @@map("denominations")
+}
+
+// ── Versements (Phase 1 — schéma présent dès maintenant) ─────
+
+model DepositCode {
+  id                String    @id @default(cuid())
+  code              String    @unique
+  bankId            String
+  bank              Bank      @relation(fields: [bankId], references: [id])
+  stationId         String
+  station           Station   @relation(fields: [stationId], references: [id])
+  montant           Decimal   @db.Decimal(14, 2)
+  generatedByUserId String
+  generatedByUser   User      @relation("GeneratedBy", fields: [generatedByUserId], references: [id])
+  generatedAt       DateTime  @default(now())
+  usedAt            DateTime?
+
+  deposit Deposit?
+
+  @@map("deposit_codes")
+  @@index([stationId, usedAt])
+}
+
+model Deposit {
+  id                String        @id @default(cuid())
+  depositCodeId     String        @unique
+  depositCode       DepositCode   @relation(fields: [depositCodeId], references: [id])
+  bankId            String
+  bank              Bank          @relation(fields: [bankId], references: [id])
+  stationId         String
+  station           Station       @relation(fields: [stationId], references: [id])
+  montant           Decimal       @db.Decimal(14, 2)
+  validatedByUserId String
+  validatedByUser   User          @relation("ValidatedBy", fields: [validatedByUserId], references: [id])
+  validatedAt       DateTime      @default(now())
+  statut            StatutDeposit @default(VALIDE)
+
+  receipt Receipt?
+
+  @@map("deposits")
+}
+
+model Receipt {
+  id                String   @id @default(cuid())
+  depositId         String   @unique
+  deposit           Deposit  @relation(fields: [depositId], references: [id])
+  numeroTransaction String   @unique
+  generatedAt       DateTime @default(now())
+
+  @@map("receipts")
+}
+
+// ── Audit (§17 — ajout seul, aucune suppression) ─────────────
+
+model AuditLog {
+  id           String         @id @default(cuid())
+  date         DateTime       @default(now())
+  categorie    CategorieAudit
+  action       String
+  detail       String
+  acteurUserId String?
+  acteurLabel  String
+  stationId    String?
+  station      Station?       @relation(fields: [stationId], references: [id])
+
+  @@map("audit_logs")
+  @@index([categorie, date])
+  @@index([stationId, date])
+}
