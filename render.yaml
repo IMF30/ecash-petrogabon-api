@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: ecash-petrogabon-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npm run start
