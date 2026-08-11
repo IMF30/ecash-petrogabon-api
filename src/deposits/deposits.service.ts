@@ -45,6 +45,13 @@ export class DepositsService {
     const bank = await this.prisma.bank.findUnique({ where: { id: dto.bankId } });
     if (!bank) throw new NotFoundException("Banque introuvable.");
 
+    const cash = await this.cashDisponible(dto.stationId);
+    if (dto.montant > cash) {
+      throw new BadRequestException(
+        `Montant sélectionné (${fcfa(dto.montant)}) supérieur au cash disponible en coffre (${fcfa(cash)}).`,
+      );
+    }
+
     const code = await this.generateUniqueCode();
     const created = await this.prisma.depositCode.create({
       data: {
