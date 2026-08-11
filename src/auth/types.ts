@@ -4,6 +4,7 @@ export interface JwtPayload {
   sub: string;
   role: Role;
   stationId: string | null;
+  mustChangePassword: boolean;
 }
 
 export interface AuthenticatedRequest extends Request {

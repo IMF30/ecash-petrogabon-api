@@ -57,7 +57,12 @@ export class AuthService {
       throw new UnauthorizedException("Ce compte est désactivé.");
     }
 
-    const payload: JwtPayload = { sub: user.id, role: user.role, stationId: user.stationId };
+    const payload: JwtPayload = {
+      sub: user.id,
+      role: user.role,
+      stationId: user.stationId,
+      mustChangePassword: user.mustChangePassword,
+    };
     const accessToken = this.signAccessToken(payload);
     const refreshToken = await this.issueRefreshToken(user.id);
 
@@ -82,6 +87,7 @@ export class AuthService {
         email: user.email,
         role: user.role,
         stationId: user.stationId,
+        mustChangePassword: user.mustChangePassword,
       },
     };
   }
@@ -96,7 +102,12 @@ export class AuthService {
 
     await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
 
-    const payload: JwtPayload = { sub: stored.user.id, role: stored.user.role, stationId: stored.user.stationId };
+    const payload: JwtPayload = {
+      sub: stored.user.id,
+      role: stored.user.role,
+      stationId: stored.user.stationId,
+      mustChangePassword: stored.user.mustChangePassword,
+    };
     const accessToken = this.signAccessToken(payload);
     const refreshToken = await this.issueRefreshToken(stored.user.id);
     return { accessToken, refreshToken };
@@ -118,7 +129,10 @@ export class AuthService {
     }
 
     const passwordHash = await argon2.hash(newPassword);
-    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash, mustChangePassword: false },
+    });
 
     await this.auditService.record({
       categorie: "UTILISATEUR",

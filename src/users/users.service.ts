@@ -16,6 +16,7 @@ const PUBLIC_FIELDS = {
   role: true,
   stationId: true,
   statut: true,
+  mustChangePassword: true,
   derniereConnexion: true,
   createdAt: true,
 } as const;
@@ -74,12 +75,15 @@ export class UsersService {
     await this.findOne(id);
     const { password, ...rest } = dto;
     const data: Record<string, unknown> = { ...rest };
-    if (password) data.passwordHash = await argon2.hash(password);
+    if (password) {
+      data.passwordHash = await argon2.hash(password);
+      data.mustChangePassword = true;
+    }
 
     const updated = await this.prisma.user.update({ where: { id }, data, select: PUBLIC_FIELDS });
     await this.auditService.record({
       categorie: "UTILISATEUR",
-      action: "Utilisateur modifié",
+      action: password ? "Mot de passe réinitialisé par l'administrateur" : "Utilisateur modifié",
       detail: `${updated.prenom} ${updated.nom} — ${updated.role}`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,

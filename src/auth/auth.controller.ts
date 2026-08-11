@@ -57,6 +57,7 @@ export class AuthController {
       email: record.email,
       role: record.role,
       stationId: record.stationId,
+      mustChangePassword: record.mustChangePassword,
     };
   }
 }

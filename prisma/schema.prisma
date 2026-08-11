@@ -76,6 +76,7 @@ model User {
   statut            StatutCompte @default(ACTIF)
   stationId         String?
   station           Station?     @relation(fields: [stationId], references: [id])
+  mustChangePassword Boolean     @default(false)
   derniereConnexion DateTime?
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
