@@ -14,8 +14,8 @@ export class AttendantsController {
   constructor(private readonly attendantsService: AttendantsService) {}
 
   @Get()
-  findAll(@Query("stationId") stationId?: string) {
-    return this.attendantsService.findAll(stationId);
+  findAll(@Query("stationId") stationId: string | undefined, @CurrentUser() user: JwtPayload) {
+    return this.attendantsService.findAll(stationId, user);
   }
 
   @Get("current-shift")
@@ -24,8 +24,8 @@ export class AttendantsController {
   }
 
   @Get(":id")
-  findOne(@Param("id") id: string) {
-    return this.attendantsService.findOne(id);
+  findOne(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.attendantsService.findOne(id, user);
   }
 
   @Post()
@@ -35,13 +35,13 @@ export class AttendantsController {
   }
 
   @Patch(":id")
-  @Roles("ADMINISTRATEUR", "GERANTE")
+  @Roles("ADMINISTRATEUR")
   update(@Param("id") id: string, @Body() dto: UpdateAttendantDto, @CurrentUser() user: JwtPayload) {
     return this.attendantsService.update(id, dto, user);
   }
 
   @Delete(":id")
-  @Roles("ADMINISTRATEUR", "GERANTE")
+  @Roles("ADMINISTRATEUR")
   remove(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
     return this.attendantsService.remove(id, user);
   }

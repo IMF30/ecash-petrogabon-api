@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { CreateAttendantDto } from "./dto/create-attendant.dto";
@@ -12,22 +12,27 @@ export class AttendantsService {
     private readonly auditService: AuditService,
   ) {}
 
-  findAll(stationId?: string) {
+  findAll(stationId: string | undefined, actor: JwtPayload) {
+    const scopedStationId = actor.role === "GERANTE" ? actor.stationId ?? undefined : stationId;
     return this.prisma.attendant.findMany({
-      where: stationId ? { stationId } : undefined,
+      where: scopedStationId ? { stationId: scopedStationId } : undefined,
       orderBy: { nom: "asc" },
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actor: JwtPayload) {
     const attendant = await this.prisma.attendant.findUnique({ where: { id } });
     if (!attendant) throw new NotFoundException("Pompiste introuvable.");
+    if (actor.role === "GERANTE" && attendant.stationId !== actor.stationId) {
+      throw new ForbiddenException("Ce pompiste ne concerne pas votre station.");
+    }
     return attendant;
   }
 
   async create(dto: CreateAttendantDto, actor: JwtPayload) {
+    const stationId = actor.role === "GERANTE" ? actor.stationId ?? dto.stationId : dto.stationId;
     const created = await this.prisma.attendant.create({
-      data: { ...dto, embauche: new Date(dto.embauche) },
+      data: { ...dto, stationId, embauche: new Date(dto.embauche) },
     });
     await this.auditService.record({
       categorie: "POMPISTE",
@@ -41,7 +46,7 @@ export class AttendantsService {
   }
 
   async update(id: string, dto: UpdateAttendantDto, actor: JwtPayload) {
-    await this.findOne(id);
+    await this.findOne(id, actor);
     const updated = await this.prisma.attendant.update({
       where: { id },
       data: { ...dto, embauche: dto.embauche ? new Date(dto.embauche) : undefined },
@@ -58,7 +63,7 @@ export class AttendantsService {
   }
 
   async remove(id: string, actor: JwtPayload) {
-    const attendant = await this.findOne(id);
+    const attendant = await this.findOne(id, actor);
     await this.prisma.attendant.delete({ where: { id } });
     await this.auditService.record({
       categorie: "POMPISTE",
