@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import * as argon2 from "argon2";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -94,7 +95,19 @@ export class UsersService {
 
   async remove(id: string, actor: JwtPayload) {
     const user = await this.findOne(id);
-    await this.prisma.user.delete({ where: { id } });
+    try {
+      await this.prisma.$transaction([
+        this.prisma.refreshToken.deleteMany({ where: { userId: id } }),
+        this.prisma.user.delete({ where: { id } }),
+      ]);
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+        throw new ConflictException(
+          "Impossible de supprimer : cet utilisateur a généré ou validé des transactions. Désactivez plutôt le compte.",
+        );
+      }
+      throw error;
+    }
     await this.auditService.record({
       categorie: "UTILISATEUR",
       action: "Utilisateur supprimé",
