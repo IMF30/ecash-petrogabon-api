@@ -28,6 +28,8 @@ export class AttendantsController {
     return this.attendantsService.findOne(id, user);
   }
 
+  // La GERANTE peut recruter pour sa propre station, mais seul l'ADMINISTRATEUR
+  // peut ensuite modifier ou supprimer un pompiste (changement de rôle, statut, etc.).
   @Post()
   @Roles("ADMINISTRATEUR", "GERANTE")
   create(@Body() dto: CreateAttendantDto, @CurrentUser() user: JwtPayload) {

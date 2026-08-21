@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { describeChanges } from "../common/describe-changes";
 import { CreateBankDto } from "./dto/create-bank.dto";
 import { UpdateBankDto } from "./dto/update-bank.dto";
 import { JwtPayload } from "../auth/types";
@@ -36,12 +37,12 @@ export class BanksService {
   }
 
   async update(id: string, dto: UpdateBankDto, actor: JwtPayload) {
-    await this.findOne(id);
+    const before = await this.findOne(id);
     const updated = await this.prisma.bank.update({ where: { id }, data: dto });
     await this.auditService.record({
       categorie: "BANQUE",
       action: "Banque modifiée",
-      detail: updated.nom,
+      detail: `${updated.nom} — ${describeChanges(before, dto)}`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: null,

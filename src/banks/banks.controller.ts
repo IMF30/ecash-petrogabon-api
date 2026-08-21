@@ -24,7 +24,7 @@ export class BanksController {
   }
 
   @Post()
-  @Roles("ADMINISTRATEUR")
+  @Roles("ADMINISTRATEUR", "TRESORERIE")
   create(@Body() dto: CreateBankDto, @CurrentUser() user: JwtPayload) {
     return this.banksService.create(dto, user);
   }

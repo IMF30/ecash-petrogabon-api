@@ -49,6 +49,62 @@ async function main() {
     if (!existing) await prisma.attendant.create({ data: { ...p, stationId: pk8.id } });
   }
 
+  console.log("Seed : pompes...");
+  const codesPompes = [
+    "S1-A", "G1-A", "S1-B", "G1-B",
+    "S2-A", "G2-A", "S2-B", "G2-B",
+    "S3-A", "G3-A", "S3-B", "G3-B",
+    "S4-A", "G4-A", "S4-B", "G4-B",
+    "S5-A", "G5-A", "S5-B", "G5-B",
+    "S6-A", "G6-A", "S6-B", "G6-B",
+    "G7-A", "G7-B", "G7-C", "G7-D",
+    "G8-A", "G8-B", "G8-C", "G8-D",
+    "G9-A", "G9-B", "G9-C", "G9-D",
+  ];
+  for (const code of codesPompes) {
+    await prisma.pump.upsert({
+      where: { stationId_code: { stationId: pk8.id, code } },
+      update: {},
+      create: { stationId: pk8.id, code, produit: code.startsWith("S") ? "ESSENCE" : "GASOIL" },
+    });
+  }
+
+  console.log("Seed : lubrifiants OKAN...");
+  const PRIX_PAR_CONTENANCE: Record<string, number> = {
+    "1L": 4000,
+    "5L": 17000,
+    "20L": 60000,
+    "200L": 500000,
+  };
+  const lubrifiants = [
+    { nom: "OKAN SX 10W40", type: "Huile moteur semi-synthétique essence/diesel", viscosite: "10W40", formats: ["1L", "5L"] },
+    { nom: "OKAN MX 15W-40", type: "Huile moteur minérale diesel", viscosite: "15W-40", formats: ["5L", "200L"] },
+    { nom: "OKAN TM 85W140", type: "Huile de transmission extrême pression minérale", viscosite: "85W140", formats: ["200L"] },
+    { nom: "OKAN TM 80W90", type: "Huile de transmission extrême pression minérale", viscosite: "80W90", formats: ["1L", "20L", "200L"] },
+    { nom: "OKAN TM 80W", type: "Huile de transmission extrême pression minérale (monograde)", viscosite: "80W", formats: ["200L"] },
+    { nom: "OKAN OUTBOARD 2T", type: "Huile moteur hors-bord 2 temps entièrement synthétique", viscosite: null, formats: ["1L", "200L"] },
+  ];
+  for (const l of lubrifiants) {
+    const produit = await prisma.lubricantProduct.upsert({
+      where: { nom: l.nom },
+      update: {},
+      create: { nom: l.nom, type: l.type, viscosite: l.viscosite },
+    });
+    for (const contenance of l.formats) {
+      await prisma.lubricantFormat.upsert({
+        where: { lubricantProductId_contenance: { lubricantProductId: produit.id, contenance } },
+        update: {},
+        create: { lubricantProductId: produit.id, contenance, prixUnitaire: PRIX_PAR_CONTENANCE[contenance] },
+      });
+    }
+  }
+
+  console.log("Seed : prix réseau (carburant + GPL)...");
+  const priceConfigExistant = await prisma.priceConfig.findFirst();
+  if (!priceConfigExistant) {
+    await prisma.priceConfig.create({ data: {} });
+  }
+
   console.log("Seed : utilisateurs...");
   const motDePasseDemo = await argon2.hash("Demo1234!");
   const utilisateurs = [

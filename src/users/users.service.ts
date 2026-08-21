@@ -1,12 +1,14 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
 import * as argon2 from "argon2";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { describeChanges } from "../common/describe-changes";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { JwtPayload } from "../auth/types";
 
+// Champs renvoyés par l'API : passwordHash n'y figure jamais, pour ne pas exposer
+// le hash du mot de passe même par accident dans les réponses.
 const PUBLIC_FIELDS = {
   id: true,
   prenom: true,
@@ -57,6 +59,9 @@ export class UsersService {
         stationId: dto.stationId,
         statut: dto.statut,
         passwordHash,
+        // Comme pour une réinitialisation (cf. update() ci-dessous) : un mot de passe
+        // initial fixé par l'administrateur doit être changé dès la première connexion.
+        mustChangePassword: true,
       },
       select: PUBLIC_FIELDS,
     });
@@ -73,11 +78,13 @@ export class UsersService {
   }
 
   async update(id: string, dto: UpdateUserDto, actor: JwtPayload) {
-    await this.findOne(id);
+    const before = await this.findOne(id);
     const { password, ...rest } = dto;
     const data: Record<string, unknown> = { ...rest };
     if (password) {
       data.passwordHash = await argon2.hash(password);
+      // Un mot de passe imposé par l'administrateur doit être changé par l'utilisateur
+      // dès sa prochaine connexion (politique de sécurité).
       data.mustChangePassword = true;
     }
 
@@ -85,37 +92,16 @@ export class UsersService {
     await this.auditService.record({
       categorie: "UTILISATEUR",
       action: password ? "Mot de passe réinitialisé par l'administrateur" : "Utilisateur modifié",
-      detail: `${updated.prenom} ${updated.nom} — ${updated.role}`,
+      // En cas de réinitialisation de mot de passe, on ne journalise pas le détail des champs
+      // (describeChanges) : le mot de passe lui-même n'y figure jamais, mais on évite aussi
+      // de mélanger un changement de sécurité avec un éventuel changement de profil.
+      detail: password
+        ? `${updated.prenom} ${updated.nom} — ${updated.role}`
+        : `${updated.prenom} ${updated.nom} — ${updated.role} — ${describeChanges(before, rest)}`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: updated.stationId,
     });
     return updated;
-  }
-
-  async remove(id: string, actor: JwtPayload) {
-    const user = await this.findOne(id);
-    try {
-      await this.prisma.$transaction([
-        this.prisma.refreshToken.deleteMany({ where: { userId: id } }),
-        this.prisma.user.delete({ where: { id } }),
-      ]);
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
-        throw new ConflictException(
-          "Impossible de supprimer : cet utilisateur a généré ou validé des transactions. Désactivez plutôt le compte.",
-        );
-      }
-      throw error;
-    }
-    await this.auditService.record({
-      categorie: "UTILISATEUR",
-      action: "Utilisateur supprimé",
-      detail: `${user.prenom} ${user.nom}`,
-      acteurUserId: actor.sub,
-      acteurLabel: actor.role,
-      stationId: user.stationId,
-    });
-    return { id };
   }
 }

@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { describeChanges } from "../common/describe-changes";
 import { CreateAttendantDto } from "./dto/create-attendant.dto";
 import { UpdateAttendantDto } from "./dto/update-attendant.dto";
 import { JwtPayload } from "../auth/types";
@@ -13,6 +14,8 @@ export class AttendantsService {
   ) {}
 
   findAll(stationId: string | undefined, actor: JwtPayload) {
+    // Une GERANTE ne voit que sa propre station : le paramètre stationId reçu est ignoré
+    // à son profit pour empêcher un accès aux pompistes d'une autre station via la query string.
     const scopedStationId = actor.role === "GERANTE" ? actor.stationId ?? undefined : stationId;
     return this.prisma.attendant.findMany({
       where: scopedStationId ? { stationId: scopedStationId } : undefined,
@@ -30,6 +33,8 @@ export class AttendantsService {
   }
 
   async create(dto: CreateAttendantDto, actor: JwtPayload) {
+    // Même règle qu'au-dessus : la station de la GERANTE prime sur celle du corps de la requête,
+    // pour qu'elle ne puisse pas créer un pompiste rattaché à une autre station.
     const stationId = actor.role === "GERANTE" ? actor.stationId ?? dto.stationId : dto.stationId;
     const created = await this.prisma.attendant.create({
       data: { ...dto, stationId, embauche: new Date(dto.embauche) },
@@ -46,7 +51,7 @@ export class AttendantsService {
   }
 
   async update(id: string, dto: UpdateAttendantDto, actor: JwtPayload) {
-    await this.findOne(id, actor);
+    const before = await this.findOne(id, actor);
     const updated = await this.prisma.attendant.update({
       where: { id },
       data: { ...dto, embauche: dto.embauche ? new Date(dto.embauche) : undefined },
@@ -54,7 +59,7 @@ export class AttendantsService {
     await this.auditService.record({
       categorie: "POMPISTE",
       action: "Pompiste modifié",
-      detail: `${updated.prenom} ${updated.nom}`,
+      detail: `${updated.prenom} ${updated.nom} — ${describeChanges(before, dto)}`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: updated.stationId,

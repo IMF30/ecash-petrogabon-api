@@ -13,8 +13,8 @@ export class CashEntriesController {
   constructor(private readonly cashEntriesService: CashEntriesService) {}
 
   @Get()
-  findAll(@Query("stationId") stationId?: string) {
-    return this.cashEntriesService.findAll(stationId);
+  findAll(@Query("stationId") stationId: string | undefined, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.findAll(stationId, user);
   }
 
   @Post()

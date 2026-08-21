@@ -6,10 +6,17 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { JwtPayload } from "./types";
 
+// Le refresh token brut n'est jamais stocké en base : seul son empreinte SHA-256
+// l'est, afin qu'une fuite de la base ne permette pas de réutiliser les jetons.
 function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
+/**
+ * Authentification par double jeton : un access token JWT à courte durée de vie
+ * (vérifiable hors ligne, sans base de données) et un refresh token opaque
+ * stocké côté serveur (hashé) pour pouvoir être révoqué ou tourné à chaque usage.
+ */
 @Injectable()
 export class AuthService {
   constructor(
@@ -18,6 +25,9 @@ export class AuthService {
     private readonly auditService: AuditService,
   ) {}
 
+  // Jeton d'accès : courte durée de vie (15 min par défaut) car il est auto-suffisant
+  // (vérifié par simple signature, sans aller en base) — le limiter dans le temps
+  // borne les dégâts s'il est un jour intercepté.
   private signAccessToken(payload: JwtPayload): string {
     return this.jwtService.sign(payload, {
       secret: process.env.JWT_ACCESS_SECRET,
@@ -25,6 +35,9 @@ export class AuthService {
     });
   }
 
+  // Jeton de rafraîchissement : longue durée de vie (7 jours par défaut) mais tracé
+  // en base (table refreshToken), ce qui permet de le révoquer (logout, rotation)
+  // contrairement au jeton d'accès qui reste valide jusqu'à son expiration.
   private async issueRefreshToken(userId: string): Promise<string> {
     const raw = randomBytes(48).toString("hex");
     const days = Number(process.env.JWT_REFRESH_TTL_DAYS ?? 7);
@@ -41,6 +54,10 @@ export class AuthService {
   async login(identifiant: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { identifiant } });
 
+    // argon2.verify compare le mot de passe fourni au hash stocké (argon2, calculé
+    // dans changePassword ci-dessous). Le message d'erreur reste volontairement
+    // identique que l'identifiant soit inconnu ou le mot de passe faux, pour ne
+    // pas révéler quels identifiants existent.
     if (!user || !(await argon2.verify(user.passwordHash, password))) {
       await this.auditService.record({
         categorie: "CONNEXION",
@@ -57,6 +74,10 @@ export class AuthService {
       throw new UnauthorizedException("Ce compte est désactivé.");
     }
 
+    // mustChangePassword est recopié dans le payload et renvoyé au frontend :
+    // il force l'affichage d'un écran de changement de mot de passe obligatoire
+    // (ex. compte créé par un Administrateur avec un mot de passe provisoire),
+    // sans bloquer la connexion elle-même.
     const payload: JwtPayload = {
       sub: user.id,
       role: user.role,
@@ -100,6 +121,9 @@ export class AuthService {
       throw new UnauthorizedException("Session expirée, veuillez vous reconnecter.");
     }
 
+    // Rotation : le refresh token utilisé est révoqué immédiatement et remplacé
+    // par un nouveau. Cela empêche un jeton volé d'être réutilisé indéfiniment
+    // et permet de détecter un rejeu (le jeton révoqué ne sera plus jamais valide).
     await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
 
     const payload: JwtPayload = {
@@ -128,9 +152,12 @@ export class AuthService {
       throw new UnauthorizedException("Mot de passe actuel incorrect.");
     }
 
+    // argon2.hash génère un nouveau hash (sel aléatoire inclus) : c'est la seule
+    // façon dont un mot de passe est écrit en base dans l'application.
     const passwordHash = await argon2.hash(newPassword);
     await this.prisma.user.update({
       where: { id: userId },
+      // mustChangePassword repasse à false : l'obligation de changement initial est levée.
       data: { passwordHash, mustChangePassword: false },
     });
 

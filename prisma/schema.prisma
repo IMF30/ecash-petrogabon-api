@@ -47,15 +47,25 @@ enum DenominationType {
   PIECE
 }
 
-enum StatutDeposit {
-  VALIDE
+enum Produit {
+  ESSENCE
+  GASOIL
+}
+
+enum StatutPompe {
+  ACTIF
+  INACTIF
+}
+
+enum StatutProduit {
+  ACTIF
+  INACTIF
 }
 
 enum CategorieAudit {
   CONNEXION
   ENCAISSEMENT
   VERSEMENT
-  CODE
   UTILISATEUR
   STATION
   BANQUE
@@ -81,9 +91,8 @@ model User {
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
-  refreshTokens         RefreshToken[]
-  depositCodesGenerated DepositCode[]  @relation("GeneratedBy")
-  depositsValidated     Deposit[]      @relation("ValidatedBy")
+  refreshTokens RefreshToken[]
+  deposits      Deposit[]
 
   @@map("users")
 }
@@ -121,12 +130,12 @@ model Station {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users        User[]
-  attendants   Attendant[]
-  cashEntries  CashEntry[]
-  depositCodes DepositCode[]
-  deposits     Deposit[]
-  auditLogs    AuditLog[]
+  users       User[]
+  attendants  Attendant[]
+  pumps       Pump[]
+  cashEntries CashEntry[]
+  deposits    Deposit[]
+  auditLogs   AuditLog[]
 
   @@map("stations")
 }
@@ -144,10 +153,34 @@ model Attendant {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  cashEntries CashEntry[]
+  pumpReadings                 PumpReading[]
+  quartsResponsable            CashEntry[]   @relation("ResponsableQuart")
+  quartsResponsableGpl         CashEntry[]   @relation("ResponsableGpl")
+  quartsResponsableLubrifiants CashEntry[]   @relation("ResponsableLubrifiants")
 
   @@map("attendants")
   @@index([stationId])
+}
+
+// ── Prix réseau (carburant + GPL, un seul enregistrement, identique
+// pour toutes les stations — configuré par l'Admin) ───────────────
+
+model PriceConfig {
+  id String @id @default(cuid())
+
+  prixLitreEssence Decimal @db.Decimal(10, 2) @default(750)
+  prixLitreGasoil  Decimal @db.Decimal(10, 2) @default(700)
+
+  prixGpl125Pleine          Decimal @db.Decimal(10, 2) @default(6000)
+  prixGpl125Consigne        Decimal @db.Decimal(10, 2) @default(4500)
+  prixGpl125ConsigneRecharge Decimal @db.Decimal(10, 2) @default(1500)
+  prixGpl35Pleine           Decimal @db.Decimal(10, 2) @default(15000)
+  prixGpl35Consigne         Decimal @db.Decimal(10, 2) @default(11000)
+  prixGpl35ConsigneRecharge  Decimal @db.Decimal(10, 2) @default(4000)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("price_config")
 }
 
 model Bank {
@@ -162,29 +195,101 @@ model Bank {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  depositCodes DepositCode[]
-  deposits     Deposit[]
+  deposits Deposit[]
 
   @@map("banks")
 }
 
-// ── Encaissements (Phase 1 — schéma présent dès maintenant) ──
+// ── Pompes ────────────────────────────────────────────────────
+
+model Pump {
+  id        String      @id @default(cuid())
+  stationId String
+  station   Station     @relation(fields: [stationId], references: [id])
+  code      String
+  produit   Produit
+  statut    StatutPompe @default(ACTIF)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  pumpReadings PumpReading[]
+
+  @@map("pumps")
+  @@unique([stationId, code])
+  @@index([stationId])
+}
+
+// ── Lubrifiants (catalogue réseau, géré par l'Admin) ──────────
+
+model LubricantProduct {
+  id        String        @id @default(cuid())
+  nom       String        @unique // "OKAN SX 10W40"
+  type      String        // "Huile moteur essence/diesel"
+  viscosite String?       // "10W40"
+  statut    StatutProduit @default(ACTIF)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  formats LubricantFormat[]
+
+  @@map("lubricant_products")
+}
+
+model LubricantFormat {
+  id                 String           @id @default(cuid())
+  lubricantProductId String
+  lubricantProduct   LubricantProduct @relation(fields: [lubricantProductId], references: [id])
+  contenance         String           // "1L", "5L", "20L", "200L"
+  prixUnitaire       Decimal          @db.Decimal(10, 2)
+  statut             StatutProduit    @default(ACTIF)
+
+  ventes LubricantSale[]
+
+  @@map("lubricant_formats")
+  @@unique([lubricantProductId, contenance])
+}
+
+// ── Encaissements (un enregistrement par quart, station et date) ─
 
 model CashEntry {
-  id           String    @id @default(cuid())
-  attendantId  String
-  attendant    Attendant @relation(fields: [attendantId], references: [id])
-  stationId    String
-  station      Station   @relation(fields: [stationId], references: [id])
-  quart        Quart
-  totalBillets Decimal   @db.Decimal(14, 2)
-  totalPieces  Decimal   @db.Decimal(14, 2)
-  montant      Decimal   @db.Decimal(14, 2)
-  date         DateTime  @default(now())
+  id        String   @id @default(cuid())
+  stationId String
+  station   Station  @relation(fields: [stationId], references: [id])
+  quart     Quart
+  date      DateTime @default(now())
 
-  denominations Denomination[]
+  responsableQuartId       String
+  responsableQuart         Attendant @relation("ResponsableQuart", fields: [responsableQuartId], references: [id])
+  responsableGplId         String
+  responsableGpl           Attendant @relation("ResponsableGpl", fields: [responsableGplId], references: [id])
+  responsableLubrifiantsId String
+  responsableLubrifiants   Attendant @relation("ResponsableLubrifiants", fields: [responsableLubrifiantsId], references: [id])
+
+  totalBillets Decimal @db.Decimal(14, 2)
+  totalPieces  Decimal @db.Decimal(14, 2)
+  montant      Decimal @db.Decimal(14, 2) // cash physique (billetage) — seul montant réellement versable en banque
+
+  montantTpe    Decimal @db.Decimal(14, 2) @default(0) // ventes carte (TPE), déjà bancarisées, jamais physiques
+  montantGlobal Decimal @db.Decimal(14, 2) @default(0) // montant + montantTpe — sert de référence pour l'écart
+
+  quantiteGpl125Pleine          Int @default(0)
+  quantiteGpl125Consigne        Int @default(0)
+  quantiteGpl125ConsigneRecharge Int @default(0)
+  quantiteGpl35Pleine           Int @default(0)
+  quantiteGpl35Consigne         Int @default(0)
+  quantiteGpl35ConsigneRecharge  Int @default(0)
+  montantGpl                    Decimal @db.Decimal(14, 2)
+
+  montantCarburant   Decimal @db.Decimal(14, 2)
+  montantLubrifiants Decimal @db.Decimal(14, 2) @default(0)
+  ecart              Decimal @db.Decimal(14, 2)
+
+  denominations  Denomination[]
+  pumpReadings   PumpReading[]
+  lubricantSales LubricantSale[]
 
   @@map("cash_entries")
+  @@unique([stationId, quart, date])
   @@index([stationId, date])
 }
 
@@ -200,54 +305,70 @@ model Denomination {
   @@map("denominations")
 }
 
-// ── Versements (Phase 1 — schéma présent dès maintenant) ─────
+model PumpReading {
+  id             String    @id @default(cuid())
+  cashEntryId    String
+  cashEntry      CashEntry @relation(fields: [cashEntryId], references: [id])
+  attendantId    String
+  attendant      Attendant @relation(fields: [attendantId], references: [id])
+  pumpId         String
+  pump           Pump      @relation(fields: [pumpId], references: [id])
+  indexOuverture Decimal   @db.Decimal(12, 2)
+  indexFermeture Decimal   @db.Decimal(12, 2)
+  litresVendus   Decimal   @db.Decimal(12, 2)
+  montantCalcule Decimal   @db.Decimal(14, 2)
 
-model DepositCode {
-  id                String    @id @default(cuid())
-  code              String    @unique
-  bankId            String
-  bank              Bank      @relation(fields: [bankId], references: [id])
-  stationId         String
-  station           Station   @relation(fields: [stationId], references: [id])
-  montant           Decimal   @db.Decimal(14, 2)
-  generatedByUserId String
-  generatedByUser   User      @relation("GeneratedBy", fields: [generatedByUserId], references: [id])
-  generatedAt       DateTime  @default(now())
-  usedAt            DateTime?
-
-  deposit Deposit?
-
-  @@map("deposit_codes")
-  @@index([stationId, usedAt])
+  @@map("pump_readings")
+  @@unique([cashEntryId, pumpId])
+  @@index([cashEntryId])
+  @@index([attendantId])
 }
+
+model LubricantSale {
+  id                String          @id @default(cuid())
+  cashEntryId       String
+  cashEntry         CashEntry       @relation(fields: [cashEntryId], references: [id])
+  lubricantFormatId String
+  lubricantFormat   LubricantFormat @relation(fields: [lubricantFormatId], references: [id])
+  quantite          Int
+  montantCalcule    Decimal         @db.Decimal(14, 2)
+
+  @@map("lubricant_sales")
+  @@unique([cashEntryId, lubricantFormatId])
+  @@index([cashEntryId])
+}
+
+// ── Versements (saisie directe par la Gérante — pas de code) ──
 
 model Deposit {
-  id                String        @id @default(cuid())
-  depositCodeId     String        @unique
-  depositCode       DepositCode   @relation(fields: [depositCodeId], references: [id])
-  bankId            String
-  bank              Bank          @relation(fields: [bankId], references: [id])
-  stationId         String
-  station           Station       @relation(fields: [stationId], references: [id])
-  montant           Decimal       @db.Decimal(14, 2)
-  validatedByUserId String
-  validatedByUser   User          @relation("ValidatedBy", fields: [validatedByUserId], references: [id])
-  validatedAt       DateTime      @default(now())
-  statut            StatutDeposit @default(VALIDE)
+  id              String   @id @default(cuid())
+  numeroBordereau String
+  bankId          String
+  bank            Bank     @relation(fields: [bankId], references: [id])
+  stationId       String
+  station         Station  @relation(fields: [stationId], references: [id])
+  montant         Decimal  @db.Decimal(14, 2)
+  createdByUserId String
+  createdByUser   User     @relation(fields: [createdByUserId], references: [id])
+  createdAt       DateTime @default(now())
 
-  receipt Receipt?
+  denominations DepositDenomination[]
 
   @@map("deposits")
+  @@unique([bankId, numeroBordereau])
+  @@index([stationId, createdAt])
 }
 
-model Receipt {
-  id                String   @id @default(cuid())
-  depositId         String   @unique
-  deposit           Deposit  @relation(fields: [depositId], references: [id])
-  numeroTransaction String   @unique
-  generatedAt       DateTime @default(now())
+model DepositDenomination {
+  id            String           @id @default(cuid())
+  depositId     String
+  deposit       Deposit          @relation(fields: [depositId], references: [id])
+  type          DenominationType
+  valeurFaciale Decimal          @db.Decimal(10, 2)
+  quantite      Int
+  sousTotal     Decimal          @db.Decimal(14, 2)
 
-  @@map("receipts")
+  @@map("deposit_denominations")
 }
 
 // ── Audit (§17 — ajout seul, aucune suppression) ─────────────
@@ -266,4 +387,29 @@ model AuditLog {
   @@map("audit_logs")
   @@index([categorie, date])
   @@index([stationId, date])
+}
+
+// ── Journal d'erreurs techniques (réservé à l'Administrateur, pour le
+//    diagnostic de bugs — distinct du journal d'audit métier ci-dessus) ──
+
+enum ErrorLogSource {
+  BACKEND
+  FRONTEND
+}
+
+model ErrorLog {
+  id         String         @id @default(cuid())
+  date       DateTime       @default(now())
+  source     ErrorLogSource
+  message    String
+  stack      String?
+  path       String?
+  method     String?
+  statusCode Int?
+  userId     String?
+  userLabel  String?
+  userAgent  String?
+
+  @@map("error_logs")
+  @@index([source, date])
 }

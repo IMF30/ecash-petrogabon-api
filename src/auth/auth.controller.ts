@@ -1,10 +1,11 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from "@nestjs/common";
-import { ThrottlerGuard } from "@nestjs/throttler";
+import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { ChangePasswordDto } from "./dto/change-password.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { CurrentUser } from "./decorators/current-user.decorator";
+import { AllowPasswordChangePending } from "./decorators/allow-password-change-pending.decorator";
 import { JwtPayload } from "./types";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -21,7 +22,9 @@ export class AuthController {
   ) {}
 
   @Post("login")
-  @UseGuards(ThrottlerGuard)
+  // Resserre la limite par défaut (100/min, cf. app.module.ts) à 5/min/IP sur cette
+  // route précise, pour freiner le brute-force sur les mots de passe.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(@Body() dto: LoginDto) {
     return this.authService.login(dto.identifiant, dto.password);
   }
@@ -39,6 +42,7 @@ export class AuthController {
 
   @Patch("password")
   @UseGuards(JwtAuthGuard)
+  @AllowPasswordChangePending()
   @HttpCode(HttpStatus.NO_CONTENT)
   async changePassword(@Body() dto: ChangePasswordDto, @CurrentUser() user: JwtPayload) {
     await this.authService.changePassword(user.sub, dto.currentPassword, dto.newPassword);
@@ -46,6 +50,7 @@ export class AuthController {
 
   @Get("me")
   @UseGuards(JwtAuthGuard)
+  @AllowPasswordChangePending()
   async me(@CurrentUser() user: JwtPayload) {
     const record = await this.prisma.user.findUnique({ where: { id: user.sub } });
     if (!record) return null;

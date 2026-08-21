@@ -40,6 +40,8 @@ export class AuditService {
       },
       include: { station: true },
       orderBy: { date: "desc" },
+      // Limite volontaire à 500 lignes : le journal grossit continuellement,
+      // ce plafond évite de renvoyer un historique complet trop lourd.
       take: 500,
     });
   }

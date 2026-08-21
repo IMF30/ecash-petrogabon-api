@@ -10,6 +10,8 @@ import { Roles } from "../auth/decorators/roles.decorator";
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
+  // Journal d'audit métier (actions des utilisateurs) : consultable par l'ADMINISTRATEUR
+  // et par le CONTROLE_INTERNE, dont le rôle est justement de vérifier ces actions.
   @Get()
   @Roles("ADMINISTRATEUR", "CONTROLE_INTERNE")
   async findAll(
