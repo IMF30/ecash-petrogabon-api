@@ -8,11 +8,18 @@ import { AppModule } from "./app.module";
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // En production, l'API tourne derrière un reverse-proxy (Render). Sans ça,
-  // req.ip renvoie l'adresse du proxy pour toutes les requêtes, ce qui casse
-  // le rate-limiting par IP de ThrottlerGuard (tous les utilisateurs partageraient
-  // la même limite). "1" = on ne fait confiance qu'au premier proxy immédiat.
-  app.set("trust proxy", 1);
+  // En production, l'API tourne derrière plusieurs sauts de proxy (Cloudflare
+  // puis le load-balancer de Render) — le nombre exact varie et n'est pas
+  // documenté. "1" (un seul saut de confiance) s'est révélé insuffisant en
+  // conditions réelles : req.ip retombait sur l'IP d'un proxy intermédiaire,
+  // différente selon le nœud qui traite la requête, ce qui dispersait les
+  // requêtes d'un même client sur plusieurs compteurs de débit au lieu d'un
+  // seul (vérifié : x-ratelimit-remaining variait de façon incohérente entre
+  // requêtes successives). `true` fait confiance à toute la chaîne devant
+  // l'appli et retient l'IP la plus à gauche de X-Forwarded-For (le client
+  // d'origine) — sûr ici car seuls Cloudflare et Render se trouvent entre
+  // l'internet et ce conteneur, aucun n'est contrôlable par un attaquant.
+  app.set("trust proxy", true);
 
   // Nécessaire pour lire request.cookies.access_token dans JwtAuthGuard
   // (le cookie httpOnly est posé par le proxy Next.js, pas par cette API).
