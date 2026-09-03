@@ -19,11 +19,27 @@ function hashToken(raw: string): string {
  */
 @Injectable()
 export class AuthService {
+  private static readonly MAX_FAILED_ATTEMPTS = 5;
+  private static readonly LOCKOUT_DURATION_MS = 15 * 60_000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,
   ) {}
+
+  // Hash de leurre calculé une seule fois (paresseusement) pour que login() puisse
+  // toujours appeler argon2.verify, que l'identifiant existe ou non — sans ça, un
+  // identifiant inconnu répondait sensiblement plus vite qu'un mot de passe faux sur
+  // un compte réel (argon2.verify est une opération volontairement coûteuse), ce qui
+  // permettait d'énumérer les identifiants valides par mesure du temps de réponse.
+  private dummyHash: string | null = null;
+  private async getDummyHash(): Promise<string> {
+    if (!this.dummyHash) {
+      this.dummyHash = await argon2.hash(randomBytes(32).toString("hex"));
+    }
+    return this.dummyHash;
+  }
 
   // Jeton d'accès : courte durée de vie (15 min par défaut) car il est auto-suffisant
   // (vérifié par simple signature, sans aller en base) — le limiter dans le temps
@@ -54,11 +70,34 @@ export class AuthService {
   async login(identifiant: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { identifiant } });
 
+    // Verrouillage par compte : le débit-limitage par IP (@Throttle sur /auth/login,
+    // 5/min) ne protège pas contre un attaquant distribuant ses tentatives sur
+    // plusieurs IP pour viser un seul compte. Après AuthService.MAX_FAILED_ATTEMPTS
+    // échecs consécutifs, le compte est bloqué pendant AuthService.LOCKOUT_DURATION_MS,
+    // indépendamment de la provenance des requêtes.
+    if (user?.lockedUntil && user.lockedUntil > new Date()) {
+      throw new UnauthorizedException("Compte temporairement verrouillé suite à plusieurs échecs de connexion. Réessayez plus tard.");
+    }
+
     // argon2.verify compare le mot de passe fourni au hash stocké (argon2, calculé
     // dans changePassword ci-dessous). Le message d'erreur reste volontairement
     // identique que l'identifiant soit inconnu ou le mot de passe faux, pour ne
-    // pas révéler quels identifiants existent.
-    if (!user || !(await argon2.verify(user.passwordHash, password))) {
+    // pas révéler quels identifiants existent. On appelle systématiquement
+    // argon2.verify (sur un hash de leurre si l'identifiant n'existe pas) pour que
+    // le temps de réponse ne le révèle pas non plus (cf. getDummyHash ci-dessus).
+    const motDePasseValide = await argon2.verify(user?.passwordHash ?? await this.getDummyHash(), password);
+    if (!user || !motDePasseValide) {
+      if (user) {
+        const attempts = user.failedLoginAttempts + 1;
+        const verrouille = attempts >= AuthService.MAX_FAILED_ATTEMPTS;
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            failedLoginAttempts: verrouille ? 0 : attempts,
+            lockedUntil: verrouille ? new Date(Date.now() + AuthService.LOCKOUT_DURATION_MS) : null,
+          },
+        });
+      }
       await this.auditService.record({
         categorie: "CONNEXION",
         action: "Échec d'authentification",
@@ -87,7 +126,10 @@ export class AuthService {
     const accessToken = this.signAccessToken(payload);
     const refreshToken = await this.issueRefreshToken(user.id);
 
-    await this.prisma.user.update({ where: { id: user.id }, data: { derniereConnexion: new Date() } });
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { derniereConnexion: new Date(), failedLoginAttempts: 0, lockedUntil: null },
+    });
     await this.auditService.record({
       categorie: "CONNEXION",
       action: "Connexion réussie",
@@ -121,6 +163,15 @@ export class AuthService {
       throw new UnauthorizedException("Session expirée, veuillez vous reconnecter.");
     }
 
+    // Un compte désactivé après coup (licenciement, compte compromis...) ne doit plus
+    // pouvoir prolonger sa session via /auth/refresh — sans ce contrôle, seul login()
+    // vérifiait le statut, et un refresh token déjà émis restait valide jusqu'à son
+    // expiration (7 jours par défaut) même après désactivation du compte.
+    if (stored.user.statut !== "ACTIF") {
+      await this.prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
+      throw new UnauthorizedException("Ce compte est désactivé.");
+    }
+
     // Rotation : le refresh token utilisé est révoqué immédiatement et remplacé
     // par un nouveau. Cela empêche un jeton volé d'être réutilisé indéfiniment
     // et permet de détecter un rejeu (le jeton révoqué ne sera plus jamais valide).
@@ -146,6 +197,20 @@ export class AuthService {
     });
   }
 
+  /**
+   * Révoque tous les refresh tokens actifs d'un utilisateur — à appeler chaque fois
+   * qu'une session existante ne doit plus pouvoir se prolonger : désactivation du
+   * compte ou changement de mot de passe (par l'intéressé ou par un Administrateur).
+   * Le jeton d'accès en cours (JWT sans état) reste valide jusqu'à sa propre expiration
+   * (15 min par défaut) — seule la capacité à en obtenir un nouveau est coupée.
+   */
+  async revokeAllForUser(userId: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || !(await argon2.verify(user.passwordHash, currentPassword))) {
@@ -160,6 +225,13 @@ export class AuthService {
       // mustChangePassword repasse à false : l'obligation de changement initial est levée.
       data: { passwordHash, mustChangePassword: false },
     });
+
+    // Note : on ne révoque pas les refresh tokens ici (contrairement à la réinitialisation
+    // par un Administrateur dans UsersService.update). Le flux de changement de mot de passe
+    // obligatoire (changer-mot-de-passe/page.tsx) appelle /auth/refresh juste après ce succès
+    // pour obtenir un JWT à jour (mustChangePassword: false) — une révocation ici casserait
+    // cet enchaînement. L'utilisateur connaît déjà l'ancien mot de passe pour arriver ici,
+    // ce qui limite le risque par rapport à une réinitialisation forcée par un tiers.
 
     await this.auditService.record({
       categorie: "UTILISATEUR",

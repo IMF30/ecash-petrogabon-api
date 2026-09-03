@@ -6,6 +6,7 @@ import { describeChanges } from "../common/describe-changes";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { JwtPayload } from "../auth/types";
+import { AuthService } from "../auth/auth.service";
 
 // Champs renvoyés par l'API : passwordHash n'y figure jamais, pour ne pas exposer
 // le hash du mot de passe même par accident dans les réponses.
@@ -29,6 +30,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly authService: AuthService,
   ) {}
 
   findAll() {
@@ -89,6 +91,14 @@ export class UsersService {
     }
 
     const updated = await this.prisma.user.update({ where: { id }, data, select: PUBLIC_FIELDS });
+
+    // Un mot de passe réinitialisé ou un compte désactivé par l'Administrateur ne
+    // doit pas laisser une session déjà ouverte se prolonger indéfiniment via
+    // /auth/refresh (ex. employé licencié, compte compromis qu'on vient de sécuriser).
+    if (password || dto.statut === "INACTIF") {
+      await this.authService.revokeAllForUser(id);
+    }
+
     await this.auditService.record({
       categorie: "UTILISATEUR",
       action: password ? "Mot de passe réinitialisé par l'administrateur" : "Utilisateur modifié",

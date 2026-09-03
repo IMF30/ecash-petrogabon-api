@@ -36,8 +36,10 @@ export class AttendantsController {
     return this.attendantsService.create(dto, user);
   }
 
+  // La GERANTE ne peut y modifier que le quart (cf. AttendantsService.update) — l'ADMINISTRATEUR
+  // garde seul le droit de modifier les autres champs (identité, statut, station...).
   @Patch(":id")
-  @Roles("ADMINISTRATEUR")
+  @Roles("ADMINISTRATEUR", "GERANTE")
   update(@Param("id") id: string, @Body() dto: UpdateAttendantDto, @CurrentUser() user: JwtPayload) {
     return this.attendantsService.update(id, dto, user);
   }

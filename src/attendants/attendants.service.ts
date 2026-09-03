@@ -52,6 +52,18 @@ export class AttendantsService {
 
   async update(id: string, dto: UpdateAttendantDto, actor: JwtPayload) {
     const before = await this.findOne(id, actor);
+
+    // La GERANTE peut réaffecter le quart de ses pompistes (gestion courante du planning),
+    // mais ne peut toucher à aucun autre champ (rôle réservé à l'ADMINISTRATEUR : identité,
+    // statut, rattachement à une station...).
+    if (actor.role === "GERANTE") {
+      const { quart, ...autresChamps } = dto;
+      if (Object.values(autresChamps).some((v) => v !== undefined)) {
+        throw new ForbiddenException("Vous ne pouvez modifier que le quart assigné à ce pompiste.");
+      }
+      dto = { quart };
+    }
+
     const updated = await this.prisma.attendant.update({
       where: { id },
       data: { ...dto, embauche: dto.embauche ? new Date(dto.embauche) : undefined },

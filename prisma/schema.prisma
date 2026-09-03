@@ -62,6 +62,15 @@ enum StatutProduit {
   INACTIF
 }
 
+// Un quart commence EN_COURS (pompistes + index d'ouverture connus) : le
+// pompiste peut y adosser plusieurs remises en caisse pendant le service.
+// Il passe à CLOTURE quand la gérante saisit les index de fermeture réels
+// et le reste des données du quart (billetage, TPE, GPL, lubrifiants).
+enum StatutQuart {
+  EN_COURS
+  CLOTURE
+}
+
 enum CategorieAudit {
   CONNEXION
   ENCAISSEMENT
@@ -88,6 +97,11 @@ model User {
   station           Station?     @relation(fields: [stationId], references: [id])
   mustChangePassword Boolean     @default(false)
   derniereConnexion DateTime?
+  // Verrouillage temporaire après plusieurs échecs de connexion consécutifs (cf.
+  // AuthService.login) — protège contre le brute-force distribué sur un compte
+  // précis, que le débit-limitage par IP (@Throttle sur /auth/login) ne couvre pas.
+  failedLoginAttempts Int        @default(0)
+  lockedUntil       DateTime?
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
@@ -252,11 +266,12 @@ model LubricantFormat {
 // ── Encaissements (un enregistrement par quart, station et date) ─
 
 model CashEntry {
-  id        String   @id @default(cuid())
+  id        String      @id @default(cuid())
   stationId String
-  station   Station  @relation(fields: [stationId], references: [id])
+  station   Station     @relation(fields: [stationId], references: [id])
   quart     Quart
-  date      DateTime @default(now())
+  date      DateTime    @default(now())
+  statut    StatutQuart @default(EN_COURS)
 
   responsableQuartId       String
   responsableQuart         Attendant @relation("ResponsableQuart", fields: [responsableQuartId], references: [id])
@@ -265,9 +280,12 @@ model CashEntry {
   responsableLubrifiantsId String
   responsableLubrifiants   Attendant @relation("ResponsableLubrifiants", fields: [responsableLubrifiantsId], references: [id])
 
-  totalBillets Decimal @db.Decimal(14, 2)
-  totalPieces  Decimal @db.Decimal(14, 2)
-  montant      Decimal @db.Decimal(14, 2) // cash physique (billetage) — seul montant réellement versable en banque
+  // Tous les champs financiers ci-dessous valent 0 tant que statut = EN_COURS
+  // (aucun billetage/TPE/GPL/lubrifiant n'est encore connu) — ils ne prennent
+  // leur valeur définitive qu'à la clôture du quart.
+  totalBillets Decimal @db.Decimal(14, 2) @default(0)
+  totalPieces  Decimal @db.Decimal(14, 2) @default(0)
+  montant      Decimal @db.Decimal(14, 2) @default(0) // cash physique (billetage) — seul montant réellement versable en banque
 
   montantTpe    Decimal @db.Decimal(14, 2) @default(0) // ventes carte (TPE), déjà bancarisées, jamais physiques
   montantGlobal Decimal @db.Decimal(14, 2) @default(0) // montant + montantTpe — sert de référence pour l'écart
@@ -278,11 +296,11 @@ model CashEntry {
   quantiteGpl35Pleine           Int @default(0)
   quantiteGpl35Consigne         Int @default(0)
   quantiteGpl35ConsigneRecharge  Int @default(0)
-  montantGpl                    Decimal @db.Decimal(14, 2)
+  montantGpl                    Decimal @db.Decimal(14, 2) @default(0)
 
-  montantCarburant   Decimal @db.Decimal(14, 2)
+  montantCarburant   Decimal @db.Decimal(14, 2) @default(0)
   montantLubrifiants Decimal @db.Decimal(14, 2) @default(0)
-  ecart              Decimal @db.Decimal(14, 2)
+  ecart              Decimal @db.Decimal(14, 2) @default(0)
 
   denominations  Denomination[]
   pumpReadings   PumpReading[]
@@ -314,14 +332,39 @@ model PumpReading {
   pumpId         String
   pump           Pump      @relation(fields: [pumpId], references: [id])
   indexOuverture Decimal   @db.Decimal(12, 2)
-  indexFermeture Decimal   @db.Decimal(12, 2)
-  litresVendus   Decimal   @db.Decimal(12, 2)
-  montantCalcule Decimal   @db.Decimal(14, 2)
+  // Estimation vivante = indexOuverture + Σ(litres des remises en caisse déjà
+  // enregistrées) — mise à jour à chaque remise, tant que le quart est EN_COURS.
+  indexCourant   Decimal?  @db.Decimal(12, 2)
+  // Relevé réel du compteur, saisi par la gérante à la clôture du quart —
+  // seule valeur qui sert au calcul financier final (peut différer légèrement
+  // de indexCourant : ventes non payées en liquide, écarts de compteur...).
+  indexFermeture Decimal?  @db.Decimal(12, 2)
+  litresVendus   Decimal?  @db.Decimal(12, 2)
+  montantCalcule Decimal?  @db.Decimal(14, 2)
+
+  remises RemiseCaisse[]
 
   @@map("pump_readings")
   @@unique([cashEntryId, pumpId])
   @@index([cashEntryId])
   @@index([attendantId])
+}
+
+// Remise en caisse mid-quart : le pompiste ne doit pas garder plus de
+// 100 000 FCFA dans sa "banane" sur la piste de vente — il reverse donc son
+// cash à la gérante en plusieurs fois pendant le service. Chaque remise fait
+// avancer indexCourant de PumpReading d'autant de litres (montant / prix au
+// litre du produit de la pompe, au moment de la remise).
+model RemiseCaisse {
+  id            String      @id @default(cuid())
+  pumpReadingId String
+  pumpReading   PumpReading @relation(fields: [pumpReadingId], references: [id])
+  montant       Decimal     @db.Decimal(12, 2)
+  litres        Decimal     @db.Decimal(12, 2)
+  createdAt     DateTime    @default(now())
+
+  @@map("remises_caisse")
+  @@index([pumpReadingId])
 }
 
 model LubricantSale {

@@ -30,11 +30,16 @@ export class AuthController {
   }
 
   @Post("refresh")
+  // Les refresh tokens sont des secrets aléatoires de 48 octets (non devinables), mais
+  // on limite quand même le débit de tentatives de recherche par empreinte en base,
+  // en défense en profondeur plutôt que de s'appuyer uniquement sur les 100/min globaux.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(@Body("refreshToken") refreshToken: string) {
     return this.authService.refresh(refreshToken);
   }
 
   @Post("logout")
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(@Body("refreshToken") refreshToken: string | undefined) {
     await this.authService.logout(refreshToken);

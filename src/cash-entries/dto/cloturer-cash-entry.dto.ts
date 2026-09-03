@@ -1,0 +1,47 @@
+import { Type } from "class-transformer";
+import { ArrayMinSize, IsArray, IsEnum, IsInt, IsNumber, IsString, Min, ValidateNested } from "class-validator";
+import { DenominationType } from "@prisma/client";
+
+class DenominationInputDto {
+  @IsEnum(DenominationType) type!: DenominationType;
+  @IsNumber() @Min(0) valeurFaciale!: number;
+  @IsInt() @Min(0) quantite!: number;
+}
+
+class PumpReadingClotureDto {
+  @IsString() pumpReadingId!: string;
+  @IsNumber() @Min(0) indexFermeture!: number;
+}
+
+class LubricantSaleInputDto {
+  @IsString() lubricantFormatId!: string;
+  @IsInt() @Min(1) quantite!: number;
+}
+
+/** Clôture un quart EN_COURS : relevés réels de fermeture + tout ce qui n'était pas encore connu à l'ouverture. */
+export class CloturerCashEntryDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => PumpReadingClotureDto)
+  pumpReadings!: PumpReadingClotureDto[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DenominationInputDto)
+  denominations!: DenominationInputDto[];
+
+  @IsNumber() @Min(0) montantTpe!: number;
+
+  @IsInt() @Min(0) quantiteGpl125Pleine!: number;
+  @IsInt() @Min(0) quantiteGpl125Consigne!: number;
+  @IsInt() @Min(0) quantiteGpl125ConsigneRecharge!: number;
+  @IsInt() @Min(0) quantiteGpl35Pleine!: number;
+  @IsInt() @Min(0) quantiteGpl35Consigne!: number;
+  @IsInt() @Min(0) quantiteGpl35ConsigneRecharge!: number;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => LubricantSaleInputDto)
+  lubricantSales!: LubricantSaleInputDto[];
+}
