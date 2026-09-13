@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { Prisma, Produit, PriceConfig } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { PricesService } from "../prices/prices.service";
@@ -10,6 +10,15 @@ import { JwtPayload } from "../auth/types";
 
 function fcfa(n: number): string {
   return new Intl.NumberFormat("fr-FR").format(n) + " FCFA";
+}
+
+const QUART_LABEL: Record<string, string> = { MATIN: "Matin", SOIR: "Soir", NUIT: "Nuit" };
+
+/** Prix au litre du carburant (Essence, Gasoil, Pétrole — les "produits blancs" vendus à la pompe). */
+function prixLitreDuProduit(produit: Produit, prixConfig: PriceConfig): number {
+  if (produit === "ESSENCE") return Number(prixConfig.prixLitreEssence);
+  if (produit === "GASOIL") return Number(prixConfig.prixLitreGasoil);
+  return Number(prixConfig.prixLitrePetrole);
 }
 
 const INCLUDE_COMPLET = {
@@ -113,6 +122,18 @@ export class CashEntriesService {
       throw new BadRequestException("Un ou plusieurs pompistes sont inactifs et ne peuvent plus être affectés à un quart.");
     }
 
+    // Règle métier : un pompiste n'est affecté qu'à un seul quart dans la journée (son quart
+    // assigné sur sa fiche) — il ne peut pas être sélectionné pour un autre quart. La gérante
+    // doit d'abord changer son quart assigné depuis sa fiche si elle veut le faire travailler
+    // sur un autre quart.
+    const horsQuartAssigne = attendants.filter((a) => a.quart !== dto.quart);
+    if (horsQuartAssigne.length > 0) {
+      const noms = horsQuartAssigne.map((a) => `${a.prenom} ${a.nom} (assigné(e) au quart ${QUART_LABEL[a.quart]})`).join(", ");
+      throw new BadRequestException(
+        `Un pompiste ne peut être sélectionné que pour son quart assigné : ${noms}. Modifiez son quart depuis sa fiche avant d'ouvrir ce quart.`,
+      );
+    }
+
     // Règle métier : un pompiste ne peut être affecté qu'à un seul quart par jour, tous rôles confondus
     // (responsable de quart, GPL, lubrifiants ou pompiste). On récupère donc tous les encaissements du
     // même jour sur les AUTRES quarts de cette station pour détecter un pompiste déjà affecté ailleurs.
@@ -214,7 +235,7 @@ export class CashEntriesService {
     }
 
     const prixConfig = await this.pricesService.get();
-    const prixLitre = pumpReading.pump.produit === "ESSENCE" ? Number(prixConfig.prixLitreEssence) : Number(prixConfig.prixLitreGasoil);
+    const prixLitre = prixLitreDuProduit(pumpReading.pump.produit, prixConfig);
     const litres = dto.montant / prixLitre;
     const indexCourant = Number(pumpReading.indexCourant ?? pumpReading.indexOuverture) + litres;
 
@@ -269,7 +290,7 @@ export class CashEntriesService {
         throw new BadRequestException(`Index de fermeture inférieur à l'index d'ouverture pour la pompe ${r.pump.code}.`);
       }
       const litresVendus = indexFermeture - indexOuverture;
-      const prixLitre = r.pump.produit === "ESSENCE" ? Number(prixConfig.prixLitreEssence) : Number(prixConfig.prixLitreGasoil);
+      const prixLitre = prixLitreDuProduit(r.pump.produit, prixConfig);
       const montantCalcule = litresVendus * prixLitre;
       return { id: r.id, indexFermeture, litresVendus, montantCalcule };
     });

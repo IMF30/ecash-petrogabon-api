@@ -9,7 +9,8 @@ import { JwtPayload } from "../auth/types";
 
 /**
  * Parc de pompes standard attribué à chaque nouvelle station, aligné sur la
- * configuration de référence PK8 (24 pompes Gasoil + 12 pompes Essence).
+ * configuration de référence PK8 (24 pompes Gasoil + 12 pompes Essence + 6
+ * pompes Pétrole).
  */
 export const DEFAULT_PUMP_CODES: { code: string; produit: Produit }[] = [
   ...["G1", "G2", "G3", "G4", "G5", "G6"].flatMap((g) => [
@@ -25,6 +26,10 @@ export const DEFAULT_PUMP_CODES: { code: string; produit: Produit }[] = [
   ...["S1", "S2", "S3", "S4", "S5", "S6"].flatMap((s) => [
     { code: `${s}-A`, produit: "ESSENCE" as Produit },
     { code: `${s}-B`, produit: "ESSENCE" as Produit },
+  ]),
+  ...["P1", "P2", "P3"].flatMap((p) => [
+    { code: `${p}-A`, produit: "PETROLE" as Produit },
+    { code: `${p}-B`, produit: "PETROLE" as Produit },
   ]),
 ];
 

@@ -50,6 +50,7 @@ enum DenominationType {
 enum Produit {
   ESSENCE
   GASOIL
+  PETROLE
 }
 
 enum StatutPompe {
@@ -184,6 +185,7 @@ model PriceConfig {
 
   prixLitreEssence Decimal @db.Decimal(10, 2) @default(750)
   prixLitreGasoil  Decimal @db.Decimal(10, 2) @default(700)
+  prixLitrePetrole Decimal @db.Decimal(10, 2) @default(650)
 
   prixGpl125Pleine          Decimal @db.Decimal(10, 2) @default(6000)
   prixGpl125Consigne        Decimal @db.Decimal(10, 2) @default(4500)

@@ -3,6 +3,7 @@ import { IsNumber, IsOptional, Min } from "class-validator";
 export class UpdatePriceConfigDto {
   @IsOptional() @IsNumber() @Min(0) prixLitreEssence?: number;
   @IsOptional() @IsNumber() @Min(0) prixLitreGasoil?: number;
+  @IsOptional() @IsNumber() @Min(0) prixLitrePetrole?: number;
 
   @IsOptional() @IsNumber() @Min(0) prixGpl125Pleine?: number;
   @IsOptional() @IsNumber() @Min(0) prixGpl125Consigne?: number;
