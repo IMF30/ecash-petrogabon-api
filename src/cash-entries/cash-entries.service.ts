@@ -6,6 +6,7 @@ import { PricesService } from "../prices/prices.service";
 import { CreateCashEntryDto } from "./dto/create-cash-entry.dto";
 import { CloturerCashEntryDto } from "./dto/cloturer-cash-entry.dto";
 import { RemiseCaisseDto } from "./dto/remise-caisse.dto";
+import { ReassignerPompeDto } from "./dto/reassigner-pompe.dto";
 import { JwtPayload } from "../auth/types";
 
 function fcfa(n: number): string {
@@ -254,6 +255,84 @@ export class CashEntriesService {
       categorie: "ENCAISSEMENT",
       action: "Remise en caisse enregistrée",
       detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${fcfa(dto.montant)} remis(e) à la gérante`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: entry.stationId,
+    });
+
+    return pumpReadingMaj;
+  }
+
+  /**
+   * Réaffecte une pompe à un autre pompiste en cours de quart (ex. malaise ou maladie du
+   * pompiste initial). L'index d'ouverture, l'index courant et les remises déjà enregistrées
+   * sur cette pompe sont conservés tels quels — seul le pompiste responsable change à partir
+   * de maintenant.
+   */
+  async reassignerPompe(cashEntryId: string, dto: ReassignerPompeDto, actor: JwtPayload) {
+    const entry = await this.prisma.cashEntry.findUnique({
+      where: { id: cashEntryId },
+      include: { pumpReadings: { include: { pump: true, attendant: true } } },
+    });
+    if (!entry) throw new NotFoundException("Quart introuvable.");
+    if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
+      throw new ForbiddenException("Vous ne pouvez réaffecter une pompe que pour votre propre station.");
+    }
+    if (entry.statut !== "EN_COURS") {
+      throw new BadRequestException("Ce quart est déjà clôturé, aucune pompe ne peut plus y être réaffectée.");
+    }
+
+    const pumpReading = entry.pumpReadings.find((r) => r.id === dto.pumpReadingId);
+    if (!pumpReading) {
+      throw new BadRequestException("Cette pompe ne fait pas partie de ce quart.");
+    }
+    if (pumpReading.attendantId === dto.nouvelAttendantId) {
+      throw new BadRequestException("Ce pompiste est déjà responsable de cette pompe.");
+    }
+
+    const nouvelAttendant = await this.prisma.attendant.findUnique({ where: { id: dto.nouvelAttendantId } });
+    if (!nouvelAttendant || nouvelAttendant.stationId !== entry.stationId) {
+      throw new BadRequestException("Ce pompiste ne fait pas partie de cette station.");
+    }
+    if (nouvelAttendant.statut !== "ACTIF") {
+      throw new BadRequestException("Ce pompiste est inactif et ne peut pas être affecté à un quart.");
+    }
+
+    // Même règle que pour les autres pompes du pompiste : 8 pompes maximum sur un même quart.
+    const pompesDejaTenues = entry.pumpReadings.filter((r) => r.attendantId === dto.nouvelAttendantId).length;
+    if (pompesDejaTenues >= 8) {
+      throw new BadRequestException(`${nouvelAttendant.prenom} ${nouvelAttendant.nom} tient déjà 8 pompes sur ce quart — maximum atteint.`);
+    }
+
+    // Un pompiste ne peut être affecté qu'à un seul quart par jour : vérifie qu'il n'est pas
+    // déjà engagé sur un autre quart de cette station à cette même date.
+    const entriesMemeJourAutreQuart = await this.prisma.cashEntry.findMany({
+      where: { stationId: entry.stationId, date: entry.date, quart: { not: entry.quart } },
+      include: { pumpReadings: true },
+    });
+    const dejaAffecteAilleurs = entriesMemeJourAutreQuart.some(
+      (e) =>
+        e.responsableQuartId === dto.nouvelAttendantId ||
+        e.responsableGplId === dto.nouvelAttendantId ||
+        e.responsableLubrifiantsId === dto.nouvelAttendantId ||
+        e.pumpReadings.some((r) => r.attendantId === dto.nouvelAttendantId),
+    );
+    if (dejaAffecteAilleurs) {
+      throw new ConflictException(
+        `${nouvelAttendant.prenom} ${nouvelAttendant.nom} est déjà affecté(e) à un autre quart ce jour-là.`,
+      );
+    }
+
+    const pumpReadingMaj = await this.prisma.pumpReading.update({
+      where: { id: pumpReading.id },
+      data: { attendantId: dto.nouvelAttendantId },
+      include: { pump: true, attendant: true, remises: { orderBy: { createdAt: "asc" } } },
+    });
+
+    await this.auditService.record({
+      categorie: "ENCAISSEMENT",
+      action: "Pompe réaffectée en cours de quart",
+      detail: `Pompe ${pumpReading.pump.code} — ${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} → ${nouvelAttendant.prenom} ${nouvelAttendant.nom}`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: entry.stationId,

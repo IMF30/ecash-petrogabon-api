@@ -3,6 +3,7 @@ import { CashEntriesService } from "./cash-entries.service";
 import { CreateCashEntryDto } from "./dto/create-cash-entry.dto";
 import { CloturerCashEntryDto } from "./dto/cloturer-cash-entry.dto";
 import { RemiseCaisseDto } from "./dto/remise-caisse.dto";
+import { ReassignerPompeDto } from "./dto/reassigner-pompe.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -35,6 +36,12 @@ export class CashEntriesController {
   @Roles("GERANTE", "ADMINISTRATEUR")
   enregistrerRemise(@Param("id") id: string, @Body() dto: RemiseCaisseDto, @CurrentUser() user: JwtPayload) {
     return this.cashEntriesService.enregistrerRemise(id, dto, user);
+  }
+
+  @Patch(":id/reassigner-pompe")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  reassignerPompe(@Param("id") id: string, @Body() dto: ReassignerPompeDto, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.reassignerPompe(id, dto, user);
   }
 
   @Patch(":id/cloturer")
