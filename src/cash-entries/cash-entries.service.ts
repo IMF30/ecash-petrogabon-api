@@ -93,13 +93,13 @@ export class CashEntriesService {
       throw new BadRequestException("Une même pompe ne peut pas être assignée à plusieurs pompistes dans le même quart.");
     }
 
-    // Règle métier : un pompiste ne peut physiquement surveiller plus de 4 pompes sur un même quart.
+    // Règle métier : un pompiste ne peut physiquement surveiller plus de 8 pompes sur un même quart.
     const pompesParAttendant = new Map<string, number>();
     for (const r of dto.pumpReadings) {
       pompesParAttendant.set(r.attendantId, (pompesParAttendant.get(r.attendantId) ?? 0) + 1);
     }
-    if ([...pompesParAttendant.values()].some((n) => n > 4)) {
-      throw new BadRequestException("Un pompiste ne peut pas se voir assigner plus de 4 pompes sur un même quart.");
+    if ([...pompesParAttendant.values()].some((n) => n > 8)) {
+      throw new BadRequestException("Un pompiste ne peut pas se voir assigner plus de 8 pompes sur un même quart.");
     }
 
     // Contrainte d'intégrité station + quart + date : un seul encaissement par quart et par jour pour une station.
