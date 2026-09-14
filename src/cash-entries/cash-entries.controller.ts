@@ -3,6 +3,8 @@ import { CashEntriesService } from "./cash-entries.service";
 import { CreateCashEntryDto } from "./dto/create-cash-entry.dto";
 import { CloturerCashEntryDto } from "./dto/cloturer-cash-entry.dto";
 import { VersementProduitDto } from "./dto/versement-produit.dto";
+import { ModifierRemiseDto } from "./dto/modifier-remise.dto";
+import { ModifierVersementDto } from "./dto/modifier-versement.dto";
 import { ReassignerPompeDto } from "./dto/reassigner-pompe.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -36,6 +38,18 @@ export class CashEntriesController {
   @Roles("GERANTE", "ADMINISTRATEUR")
   enregistrerVersement(@Param("id") id: string, @Body() dto: VersementProduitDto, @CurrentUser() user: JwtPayload) {
     return this.cashEntriesService.enregistrerVersement(id, dto, user);
+  }
+
+  @Patch(":id/remises/:remiseId")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  modifierRemise(@Param("id") id: string, @Param("remiseId") remiseId: string, @Body() dto: ModifierRemiseDto, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.modifierRemise(id, remiseId, dto, user);
+  }
+
+  @Patch(":id/versements/:versementId")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  modifierVersement(@Param("id") id: string, @Param("versementId") versementId: string, @Body() dto: ModifierVersementDto, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.modifierVersement(id, versementId, dto, user);
   }
 
   @Patch(":id/reassigner-pompe")
