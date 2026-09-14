@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { CashEntriesService } from "./cash-entries.service";
 import { CreateCashEntryDto } from "./dto/create-cash-entry.dto";
 import { CloturerCashEntryDto } from "./dto/cloturer-cash-entry.dto";
@@ -50,6 +50,18 @@ export class CashEntriesController {
   @Roles("GERANTE", "ADMINISTRATEUR")
   modifierVersement(@Param("id") id: string, @Param("versementId") versementId: string, @Body() dto: ModifierVersementDto, @CurrentUser() user: JwtPayload) {
     return this.cashEntriesService.modifierVersement(id, versementId, dto, user);
+  }
+
+  @Delete(":id/remises/:remiseId")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  supprimerRemise(@Param("id") id: string, @Param("remiseId") remiseId: string, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.supprimerRemise(id, remiseId, user);
+  }
+
+  @Delete(":id/versements/:versementId")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  supprimerVersement(@Param("id") id: string, @Param("versementId") versementId: string, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.supprimerVersement(id, versementId, user);
   }
 
   @Patch(":id/reassigner-pompe")

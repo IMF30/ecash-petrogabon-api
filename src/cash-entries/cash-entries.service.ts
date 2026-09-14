@@ -502,6 +502,90 @@ export class CashEntriesService {
   }
 
   /**
+   * Supprime une remise en caisse saisie par erreur et recalcule l'index courant de la pompe
+   * concernée à partir de ses remises restantes (redevient `null` s'il n'en reste aucune).
+   */
+  async supprimerRemise(cashEntryId: string, remiseId: string, actor: JwtPayload) {
+    const entry = await this.prisma.cashEntry.findUnique({
+      where: { id: cashEntryId },
+      include: { pumpReadings: { include: { pump: true, attendant: true, remises: true } } },
+    });
+    if (!entry) throw new NotFoundException("Quart introuvable.");
+    if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
+      throw new ForbiddenException("Vous ne pouvez supprimer une remise que pour votre propre station.");
+    }
+    if (entry.statut !== "EN_COURS") {
+      throw new BadRequestException("Ce quart est déjà clôturé, aucune remise ne peut plus y être supprimée.");
+    }
+
+    const pumpReading = entry.pumpReadings.find((r) => r.remises.some((rm) => rm.id === remiseId));
+    if (!pumpReading) throw new NotFoundException("Remise introuvable pour ce quart.");
+    const remise = pumpReading.remises.find((rm) => rm.id === remiseId)!;
+
+    const litresRestantes = pumpReading.remises
+      .filter((rm) => rm.id !== remiseId)
+      .reduce((s, rm) => s + Number(rm.litres), 0);
+    const restantIlEnA = pumpReading.remises.length > 1;
+    const indexCourant = restantIlEnA ? Number(pumpReading.indexOuverture) + litresRestantes : null;
+
+    await this.prisma.$transaction([
+      this.prisma.remiseCaisse.delete({ where: { id: remiseId } }),
+      this.prisma.pumpReading.update({ where: { id: pumpReading.id }, data: { indexCourant } }),
+    ]);
+
+    await this.auditService.record({
+      categorie: "ENCAISSEMENT",
+      action: "Remise en caisse supprimée",
+      detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${fcfa(Number(remise.montant))} supprimé(e)`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: entry.stationId,
+    });
+
+    return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
+  }
+
+  /** Supprime un versement (TPE et/ou Gaz et/ou Lubrifiants) saisi par erreur. */
+  async supprimerVersement(cashEntryId: string, versementId: string, actor: JwtPayload) {
+    const entry = await this.prisma.cashEntry.findUnique({
+      where: { id: cashEntryId },
+      include: { versements: { include: { attendant: true, lubricantSales: true } } },
+    });
+    if (!entry) throw new NotFoundException("Quart introuvable.");
+    if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
+      throw new ForbiddenException("Vous ne pouvez supprimer un versement que pour votre propre station.");
+    }
+    if (entry.statut !== "EN_COURS") {
+      throw new BadRequestException("Ce quart est déjà clôturé, aucun versement ne peut plus y être supprimé.");
+    }
+
+    const versement = entry.versements.find((v) => v.id === versementId);
+    if (!versement) throw new NotFoundException("Versement introuvable pour ce quart.");
+
+    const detailParts = [
+      Number(versement.montantTpe) > 0 && `TPE ${fcfa(Number(versement.montantTpe))}`,
+      Number(versement.montantGpl) > 0 && `Gaz ${fcfa(Number(versement.montantGpl))}`,
+      versement.lubricantSales.length > 0 && `Lubrifiants ${fcfa(versement.lubricantSales.reduce((s, ls) => s + Number(ls.montantCalcule), 0))}`,
+    ].filter(Boolean);
+
+    await this.prisma.$transaction([
+      this.prisma.versementLubrifiantSale.deleteMany({ where: { versementId } }),
+      this.prisma.versementProduit.delete({ where: { id: versementId } }),
+    ]);
+
+    await this.auditService.record({
+      categorie: "ENCAISSEMENT",
+      action: "Versement en cours de quart supprimé",
+      detail: `${versement.attendant.prenom} ${versement.attendant.nom} — ${detailParts.join(" — ")} supprimé(s)`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: entry.stationId,
+    });
+
+    return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
+  }
+
+  /**
    * Réaffecte une pompe à un autre pompiste en cours de quart (ex. malaise ou maladie du
    * pompiste initial). L'index d'ouverture, l'index courant et les remises déjà enregistrées
    * sur cette pompe sont conservés tels quels — seul le pompiste responsable change à partir
