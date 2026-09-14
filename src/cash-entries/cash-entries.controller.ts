@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@ne
 import { CashEntriesService } from "./cash-entries.service";
 import { CreateCashEntryDto } from "./dto/create-cash-entry.dto";
 import { CloturerCashEntryDto } from "./dto/cloturer-cash-entry.dto";
-import { RemiseCaisseDto } from "./dto/remise-caisse.dto";
+import { VersementProduitDto } from "./dto/versement-produit.dto";
 import { ReassignerPompeDto } from "./dto/reassigner-pompe.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -32,10 +32,10 @@ export class CashEntriesController {
     return this.cashEntriesService.create(dto, user);
   }
 
-  @Post(":id/remises")
+  @Post(":id/versements")
   @Roles("GERANTE", "ADMINISTRATEUR")
-  enregistrerRemise(@Param("id") id: string, @Body() dto: RemiseCaisseDto, @CurrentUser() user: JwtPayload) {
-    return this.cashEntriesService.enregistrerRemise(id, dto, user);
+  enregistrerVersement(@Param("id") id: string, @Body() dto: VersementProduitDto, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.enregistrerVersement(id, dto, user);
   }
 
   @Patch(":id/reassigner-pompe")

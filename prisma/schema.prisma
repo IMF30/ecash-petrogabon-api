@@ -172,6 +172,7 @@ model Attendant {
   quartsResponsable            CashEntry[]   @relation("ResponsableQuart")
   quartsResponsableGpl         CashEntry[]   @relation("ResponsableGpl")
   quartsResponsableLubrifiants CashEntry[]   @relation("ResponsableLubrifiants")
+  versements                   VersementProduit[]
 
   @@map("attendants")
   @@index([stationId])
@@ -259,7 +260,8 @@ model LubricantFormat {
   prixUnitaire       Decimal          @db.Decimal(10, 2)
   statut             StatutProduit    @default(ACTIF)
 
-  ventes LubricantSale[]
+  ventes           LubricantSale[]
+  ventesVersements VersementLubrifiantSale[]
 
   @@map("lubricant_formats")
   @@unique([lubricantProductId, contenance])
@@ -283,11 +285,15 @@ model CashEntry {
   responsableLubrifiants   Attendant @relation("ResponsableLubrifiants", fields: [responsableLubrifiantsId], references: [id])
 
   // Tous les champs financiers ci-dessous valent 0 tant que statut = EN_COURS
-  // (aucun billetage/TPE/GPL/lubrifiant n'est encore connu) — ils ne prennent
-  // leur valeur définitive qu'à la clôture du quart.
+  // (aucun versement n'est encore agrégé) — ils sont figés à la clôture du
+  // quart, à partir de la somme des remises et des VersementProduit reçus
+  // pendant le quart (voir CashEntriesService.cloturer).
+  // totalBillets/totalPieces : comptage optionnel de vérification saisi par la
+  // gérante à la clôture (Denomination) — n'alimente plus `montant`, seulement
+  // une alerte si la somme diffère de `montant`.
   totalBillets Decimal @db.Decimal(14, 2) @default(0)
   totalPieces  Decimal @db.Decimal(14, 2) @default(0)
-  montant      Decimal @db.Decimal(14, 2) @default(0) // cash physique (billetage) — seul montant réellement versable en banque
+  montant      Decimal @db.Decimal(14, 2) @default(0) // cash physique = somme des remises en caisse reçues pendant le quart
 
   montantTpe    Decimal @db.Decimal(14, 2) @default(0) // ventes carte (TPE), déjà bancarisées, jamais physiques
   montantGlobal Decimal @db.Decimal(14, 2) @default(0) // montant + montantTpe — sert de référence pour l'écart
@@ -307,6 +313,7 @@ model CashEntry {
   denominations  Denomination[]
   pumpReadings   PumpReading[]
   lubricantSales LubricantSale[]
+  versements     VersementProduit[]
 
   @@map("cash_entries")
   @@unique([stationId, quart, date])
@@ -367,6 +374,51 @@ model RemiseCaisse {
 
   @@map("remises_caisse")
   @@index([pumpReadingId])
+}
+
+// Versement progressif TPE/Gaz/Lubrifiants en cours de quart : au même moment
+// où un pompiste remet son cash (RemiseCaisse), il peut aussi déclarer ses
+// ventes carte (TPE) et, pour le/la responsable Gaz/Lubrifiants du quart, les
+// bouteilles ou bidons vendus depuis le dernier versement. Ces lignes sont
+// agrégées à la clôture pour fixer CashEntry.montantTpe/montantGpl/
+// montantLubrifiants — il n'y a plus de saisie unique de ces montants à la
+// clôture.
+model VersementProduit {
+  id          String    @id @default(cuid())
+  cashEntryId String
+  cashEntry   CashEntry @relation(fields: [cashEntryId], references: [id])
+  attendantId String
+  attendant   Attendant @relation(fields: [attendantId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  montantTpe Decimal @db.Decimal(12, 2) @default(0)
+
+  quantiteGpl125Pleine          Int @default(0)
+  quantiteGpl125Consigne        Int @default(0)
+  quantiteGpl125ConsigneRecharge Int @default(0)
+  quantiteGpl35Pleine           Int @default(0)
+  quantiteGpl35Consigne         Int @default(0)
+  quantiteGpl35ConsigneRecharge  Int @default(0)
+  montantGpl                    Decimal @db.Decimal(12, 2) @default(0)
+
+  lubricantSales VersementLubrifiantSale[]
+
+  @@map("versements_produit")
+  @@index([cashEntryId])
+  @@index([attendantId])
+}
+
+model VersementLubrifiantSale {
+  id                String           @id @default(cuid())
+  versementId       String
+  versement         VersementProduit @relation(fields: [versementId], references: [id])
+  lubricantFormatId String
+  lubricantFormat   LubricantFormat  @relation(fields: [lubricantFormatId], references: [id])
+  quantite          Int
+  montantCalcule    Decimal          @db.Decimal(14, 2)
+
+  @@map("versement_lubricant_sales")
+  @@index([versementId])
 }
 
 model LubricantSale {

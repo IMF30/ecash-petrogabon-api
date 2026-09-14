@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { ArrayMinSize, IsArray, IsEnum, IsInt, IsNumber, IsString, Min, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from "class-validator";
 import { DenominationType } from "@prisma/client";
 
 class DenominationInputDto {
@@ -13,12 +13,14 @@ class PumpReadingClotureDto {
   @IsNumber() @Min(0) indexFermeture!: number;
 }
 
-class LubricantSaleInputDto {
-  @IsString() lubricantFormatId!: string;
-  @IsInt() @Min(1) quantite!: number;
-}
-
-/** Clôture un quart EN_COURS : relevés réels de fermeture + tout ce qui n'était pas encore connu à l'ouverture. */
+/**
+ * Clôture un quart EN_COURS : relevés réels de fermeture par pompe. Le cash
+ * physique, le TPE, le Gaz et les Lubrifiants sont désormais entièrement
+ * dérivés des versements progressifs saisis pendant le quart (remises et
+ * VersementProduit) — plus aucune saisie manuelle de ces montants ici.
+ * `denominations` reste un comptage optionnel de vérification (n'alimente
+ * plus le cash physique officiel, sert seulement à signaler un écart).
+ */
 export class CloturerCashEntryDto {
   @IsArray()
   @ArrayMinSize(1)
@@ -26,22 +28,9 @@ export class CloturerCashEntryDto {
   @Type(() => PumpReadingClotureDto)
   pumpReadings!: PumpReadingClotureDto[];
 
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => DenominationInputDto)
-  denominations!: DenominationInputDto[];
-
-  @IsNumber() @Min(0) montantTpe!: number;
-
-  @IsInt() @Min(0) quantiteGpl125Pleine!: number;
-  @IsInt() @Min(0) quantiteGpl125Consigne!: number;
-  @IsInt() @Min(0) quantiteGpl125ConsigneRecharge!: number;
-  @IsInt() @Min(0) quantiteGpl35Pleine!: number;
-  @IsInt() @Min(0) quantiteGpl35Consigne!: number;
-  @IsInt() @Min(0) quantiteGpl35ConsigneRecharge!: number;
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => LubricantSaleInputDto)
-  lubricantSales!: LubricantSaleInputDto[];
+  denominations?: DenominationInputDto[];
 }
