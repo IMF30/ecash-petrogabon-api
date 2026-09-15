@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { PumpsService } from "./pumps.service";
 import { CreatePumpDto } from "./dto/create-pump.dto";
 import { UpdatePumpDto } from "./dto/update-pump.dto";
@@ -30,5 +30,11 @@ export class PumpsController {
   @Roles("ADMINISTRATEUR")
   update(@Param("id") id: string, @Body() dto: UpdatePumpDto, @CurrentUser() user: JwtPayload) {
     return this.pumpsService.update(id, dto, user);
+  }
+
+  @Delete(":id")
+  @Roles("ADMINISTRATEUR")
+  remove(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.pumpsService.remove(id, user);
   }
 }

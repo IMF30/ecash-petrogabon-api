@@ -5,4 +5,5 @@ export class CreatePumpDto {
   @IsString() code!: string;
   @IsEnum(Produit) produit!: Produit;
   @IsString() stationId!: string;
+  @IsString() distributeurId!: string;
 }

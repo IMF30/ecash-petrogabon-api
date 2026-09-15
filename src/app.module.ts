@@ -7,6 +7,7 @@ import { UsersModule } from "./users/users.module";
 import { StationsModule } from "./stations/stations.module";
 import { AttendantsModule } from "./attendants/attendants.module";
 import { PumpsModule } from "./pumps/pumps.module";
+import { DistributeursModule } from "./distributeurs/distributeurs.module";
 import { LubricantsModule } from "./lubricants/lubricants.module";
 import { PricesModule } from "./prices/prices.module";
 import { BanksModule } from "./banks/banks.module";
@@ -29,6 +30,7 @@ import { CommonModule } from "./common/common.module";
     StationsModule,
     AttendantsModule,
     PumpsModule,
+    DistributeursModule,
     LubricantsModule,
     PricesModule,
     BanksModule,

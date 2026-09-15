@@ -3,7 +3,10 @@ import { ArrayMinSize, IsArray, IsInt, IsNumber, IsOptional, IsString, Min, Vali
 
 class RemiseInputDto {
   @IsString() pumpReadingId!: string;
-  @IsNumber() @Min(1) montant!: number;
+  @IsNumber() @Min(0) montant!: number;
+  // TPE propre à cette pompe (ex. TPE-(S1-A)) — chaque pompe a son propre montant carte,
+  // saisi dans le même geste que son cash remis.
+  @IsOptional() @IsNumber() @Min(0) montantTpe?: number;
 }
 
 class LubricantSaleInputDto {
@@ -13,10 +16,10 @@ class LubricantSaleInputDto {
 
 /**
  * Versement progressif d'un pompiste en cours de quart : cash remis pompe par
- * pompe (comme avant), et désormais aussi, dans le même geste, ses ventes
- * carte (TPE) et, pour le/la responsable Gaz/Lubrifiants du quart, les
- * bouteilles ou bidons vendus depuis le dernier versement. Au moins un champ
- * doit être renseigné.
+ * pompe, chaque pompe portant aussi son propre montant TPE (ex. TPE-(S1-A)),
+ * et, pour le/la responsable Gaz/Lubrifiants du quart, les bouteilles ou
+ * bidons vendus depuis le dernier versement. Au moins un champ doit être
+ * renseigné.
  */
 export class VersementProduitDto {
   @IsString() attendantId!: string;
@@ -26,8 +29,6 @@ export class VersementProduitDto {
   @ValidateNested({ each: true })
   @Type(() => RemiseInputDto)
   remises?: RemiseInputDto[];
-
-  @IsOptional() @IsNumber() @Min(0) montantTpe?: number;
 
   @IsOptional() @IsInt() @Min(0) quantiteGpl125Pleine?: number;
   @IsOptional() @IsInt() @Min(0) quantiteGpl125Consigne?: number;

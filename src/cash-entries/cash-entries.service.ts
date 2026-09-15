@@ -26,7 +26,11 @@ function prixLitreDuProduit(produit: Produit, prixConfig: PriceConfig): number {
 
 const INCLUDE_COMPLET = {
   denominations: true,
-  pumpReadings: { include: { pump: true, attendant: true, remises: { orderBy: { createdAt: "asc" as const } } } },
+  // orderBy explicite indispensable : sans lui, Postgres/Prisma ne garantit aucun ordre stable
+  // entre deux lectures, et chaque UPDATE (ex. enregistrement d'un versement) peut faire
+  // apparaître les pompes/pompistes dans un ordre différent côté UI — l'id (cuid, ordonné dans
+  // le temps) donne un ordre stable et correspond à l'ordre d'ajout à l'ouverture du quart.
+  pumpReadings: { include: { pump: true, attendant: true, remises: { orderBy: { createdAt: "asc" as const } } }, orderBy: { id: "asc" as const } },
   lubricantSales: { include: { lubricantFormat: { include: { lubricantProduct: true } } } },
   versements: {
     include: { attendant: true, lubricantSales: { include: { lubricantFormat: { include: { lubricantProduct: true } } } } },
@@ -248,8 +252,7 @@ export class CashEntriesService {
     const attendant = entry.pumpReadings.find((r) => r.attendantId === dto.attendantId)?.attendant
       ?? (await this.prisma.attendant.findUnique({ where: { id: dto.attendantId } }))!;
 
-    const remisesDto = dto.remises ?? [];
-    const montantTpe = dto.montantTpe ?? 0;
+    const remisesDto = (dto.remises ?? []).filter((r) => r.montant > 0 || (r.montantTpe ?? 0) > 0);
     const qteGpl125Pleine = dto.quantiteGpl125Pleine ?? 0;
     const qteGpl125Consigne = dto.quantiteGpl125Consigne ?? 0;
     const qteGpl125ConsigneRecharge = dto.quantiteGpl125ConsigneRecharge ?? 0;
@@ -259,8 +262,8 @@ export class CashEntriesService {
     const lubricantSalesDto = dto.lubricantSales ?? [];
     const aUneVenteGpl = qteGpl125Pleine + qteGpl125Consigne + qteGpl125ConsigneRecharge + qteGpl35Pleine + qteGpl35Consigne + qteGpl35ConsigneRecharge > 0;
 
-    if (remisesDto.length === 0 && montantTpe === 0 && !aUneVenteGpl && lubricantSalesDto.length === 0) {
-      throw new BadRequestException("Renseignez au moins un montant remis, un montant TPE, une vente de gaz ou une vente de lubrifiant.");
+    if (remisesDto.length === 0 && !aUneVenteGpl && lubricantSalesDto.length === 0) {
+      throw new BadRequestException("Renseignez au moins un montant remis ou TPE pour une pompe, une vente de gaz ou une vente de lubrifiant.");
     }
 
     const prixConfig = await this.pricesService.get();
@@ -269,10 +272,21 @@ export class CashEntriesService {
       const pumpReading = entry.pumpReadings.find((pr) => pr.id === r.pumpReadingId);
       if (!pumpReading) throw new BadRequestException("Cette pompe ne fait pas partie de ce quart.");
       const prixLitre = prixLitreDuProduit(pumpReading.pump.produit, prixConfig);
-      const litres = r.montant / prixLitre;
+      const montantTpe = r.montantTpe ?? 0;
+      // L'index courant reflète le carburant réellement délivré par cette pompe — donc le cash ET
+      // le TPE de cette remise (un client qui paie par carte fait quand même tourner le compteur).
+      const litres = (r.montant + montantTpe) / prixLitre;
       const indexCourant = Number(pumpReading.indexCourant ?? pumpReading.indexOuverture) + litres;
-      return { pumpReadingId: pumpReading.id, pumpCode: pumpReading.pump.code, montant: r.montant, litres, indexCourant };
+      return {
+        pumpReadingId: pumpReading.id,
+        pumpCode: pumpReading.pump.code,
+        montant: r.montant,
+        montantTpe,
+        litres,
+        indexCourant,
+      };
     });
+    const montantTpeTotal = remisesAEnregistrer.reduce((s, r) => s + r.montantTpe, 0);
 
     const montantGpl =
       qteGpl125Pleine * Number(prixConfig.prixGpl125Pleine) +
@@ -301,11 +315,13 @@ export class CashEntriesService {
       return { lubricantFormatId: v.lubricantFormatId, quantite: v.quantite, montantCalcule: v.quantite * Number(format.prixUnitaire) };
     });
 
-    const aUnVersementProduit = montantTpe > 0 || aUneVenteGpl || lubricantSalesData.length > 0;
+    const aUnVersementProduit = aUneVenteGpl || lubricantSalesData.length > 0;
 
     const resultatsTransaction = await this.prisma.$transaction([
       ...remisesAEnregistrer.flatMap((r) => [
-        this.prisma.remiseCaisse.create({ data: { pumpReadingId: r.pumpReadingId, montant: r.montant, litres: r.litres } }),
+        this.prisma.remiseCaisse.create({
+          data: { pumpReadingId: r.pumpReadingId, montant: r.montant, montantTpe: r.montantTpe, litres: r.litres },
+        }),
         this.prisma.pumpReading.update({ where: { id: r.pumpReadingId }, data: { indexCourant: r.indexCourant } }),
       ]),
       ...(aUnVersementProduit
@@ -314,7 +330,6 @@ export class CashEntriesService {
               data: {
                 cashEntryId,
                 attendantId: dto.attendantId,
-                montantTpe,
                 quantiteGpl125Pleine: qteGpl125Pleine,
                 quantiteGpl125Consigne: qteGpl125Consigne,
                 quantiteGpl125ConsigneRecharge: qteGpl125ConsigneRecharge,
@@ -335,7 +350,7 @@ export class CashEntriesService {
 
     const detailParts = [
       remisesAEnregistrer.length > 0 && `Cash : ${remisesAEnregistrer.map((r) => `${r.pumpCode} ${fcfa(r.montant)}`).join(", ")}`,
-      montantTpe > 0 && `TPE ${fcfa(montantTpe)}`,
+      montantTpeTotal > 0 && `TPE : ${remisesAEnregistrer.filter((r) => r.montantTpe > 0).map((r) => `TPE-(${r.pumpCode}) ${fcfa(r.montantTpe)}`).join(", ")}`,
       aUneVenteGpl && `Gaz ${fcfa(montantGpl)}`,
       lubricantSalesData.length > 0 && `Lubrifiants ${fcfa(lubricantSalesData.reduce((s, v) => s + v.montantCalcule, 0))}`,
     ].filter(Boolean);
@@ -351,7 +366,7 @@ export class CashEntriesService {
     return entryMaj;
   }
 
-  /** Corrige le montant d'une remise en caisse déjà enregistrée (erreur de saisie) et recalcule l'index courant de la pompe concernée. */
+  /** Corrige le montant cash et/ou TPE d'une remise déjà enregistrée (erreur de saisie) et recalcule l'index courant de la pompe concernée. */
   async modifierRemise(cashEntryId: string, remiseId: string, dto: ModifierRemiseDto, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
       where: { id: cashEntryId },
@@ -369,23 +384,30 @@ export class CashEntriesService {
     if (!pumpReading) throw new NotFoundException("Remise introuvable pour ce quart.");
     const remise = pumpReading.remises.find((rm) => rm.id === remiseId)!;
     const ancienMontant = Number(remise.montant);
+    const ancienMontantTpe = Number(remise.montantTpe);
+    const montantTpe = dto.montantTpe ?? ancienMontantTpe;
 
     const prixConfig = await this.pricesService.get();
     const prixLitre = prixLitreDuProduit(pumpReading.pump.produit, prixConfig);
-    const nouvellesLitres = dto.montant / prixLitre;
+    // Même logique qu'à l'enregistrement : l'index courant reflète le cash ET le TPE de la remise.
+    const nouvellesLitres = (dto.montant + montantTpe) / prixLitre;
     const indexCourant =
       Number(pumpReading.indexOuverture) +
       pumpReading.remises.reduce((s, rm) => s + (rm.id === remiseId ? nouvellesLitres : Number(rm.litres)), 0);
 
     await this.prisma.$transaction([
-      this.prisma.remiseCaisse.update({ where: { id: remiseId }, data: { montant: dto.montant, litres: nouvellesLitres } }),
+      this.prisma.remiseCaisse.update({ where: { id: remiseId }, data: { montant: dto.montant, montantTpe, litres: nouvellesLitres } }),
       this.prisma.pumpReading.update({ where: { id: pumpReading.id }, data: { indexCourant } }),
     ]);
 
+    const detailParts = [
+      dto.montant !== ancienMontant && `Cash ${fcfa(ancienMontant)} → ${fcfa(dto.montant)}`,
+      montantTpe !== ancienMontantTpe && `TPE-(${pumpReading.pump.code}) ${fcfa(ancienMontantTpe)} → ${fcfa(montantTpe)}`,
+    ].filter(Boolean);
     await this.auditService.record({
       categorie: "ENCAISSEMENT",
       action: "Remise en caisse modifiée",
-      detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${fcfa(ancienMontant)} → ${fcfa(dto.montant)}`,
+      detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${detailParts.length > 0 ? detailParts.join(" — ") : "aucune valeur modifiée"}`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: entry.stationId,
@@ -395,11 +417,11 @@ export class CashEntriesService {
   }
 
   /**
-   * Corrige un versement déjà enregistré (TPE, Gaz et/ou Lubrifiants — erreur de saisie). Un
-   * champ omis dans le corps de la requête reste inchangé ; le Gaz n'est recalculé que si l'une
-   * de ses quantités est fournie, et les Lubrifiants ne sont remplacés que si `lubricantSales`
-   * est fourni — pour ne jamais faire dériver silencieusement une partie du versement qui
-   * n'était pas concernée par la correction.
+   * Corrige un versement déjà enregistré (Gaz et/ou Lubrifiants — erreur de saisie ; le TPE se
+   * corrige désormais par pompe via modifierRemise). Un champ omis dans le corps de la requête
+   * reste inchangé ; le Gaz n'est recalculé que si l'une de ses quantités est fournie, et les
+   * Lubrifiants ne sont remplacés que si `lubricantSales` est fourni — pour ne jamais faire
+   * dériver silencieusement une partie du versement qui n'était pas concernée par la correction.
    */
   async modifierVersement(cashEntryId: string, versementId: string, dto: ModifierVersementDto, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
@@ -417,13 +439,10 @@ export class CashEntriesService {
     const versement = entry.versements.find((v) => v.id === versementId);
     if (!versement) throw new NotFoundException("Versement introuvable pour ce quart.");
 
-    const ancienMontantTpe = Number(versement.montantTpe);
     const ancienMontantGpl = Number(versement.montantGpl);
     const ancienMontantLub = versement.lubricantSales.reduce((s, ls) => s + Number(ls.montantCalcule), 0);
 
     const prixConfig = await this.pricesService.get();
-
-    const montantTpe = dto.montantTpe ?? ancienMontantTpe;
 
     const aGplFourni =
       dto.quantiteGpl125Pleine !== undefined || dto.quantiteGpl125Consigne !== undefined || dto.quantiteGpl125ConsigneRecharge !== undefined ||
@@ -470,7 +489,6 @@ export class CashEntriesService {
       this.prisma.versementProduit.update({
         where: { id: versementId },
         data: {
-          montantTpe,
           quantiteGpl125Pleine, quantiteGpl125Consigne, quantiteGpl125ConsigneRecharge,
           quantiteGpl35Pleine, quantiteGpl35Consigne, quantiteGpl35ConsigneRecharge,
           montantGpl,
@@ -485,7 +503,6 @@ export class CashEntriesService {
     ]);
 
     const detailParts = [
-      montantTpe !== ancienMontantTpe && `TPE ${fcfa(ancienMontantTpe)} → ${fcfa(montantTpe)}`,
       montantGpl !== ancienMontantGpl && `Gaz ${fcfa(ancienMontantGpl)} → ${fcfa(montantGpl)}`,
       nouveauMontantLub !== ancienMontantLub && `Lubrifiants ${fcfa(ancienMontantLub)} → ${fcfa(nouveauMontantLub)}`,
     ].filter(Boolean);
@@ -533,10 +550,14 @@ export class CashEntriesService {
       this.prisma.pumpReading.update({ where: { id: pumpReading.id }, data: { indexCourant } }),
     ]);
 
+    const detailParts = [
+      `Cash ${fcfa(Number(remise.montant))}`,
+      Number(remise.montantTpe) > 0 && `TPE-(${pumpReading.pump.code}) ${fcfa(Number(remise.montantTpe))}`,
+    ].filter(Boolean);
     await this.auditService.record({
       categorie: "ENCAISSEMENT",
       action: "Remise en caisse supprimée",
-      detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${fcfa(Number(remise.montant))} supprimé(e)`,
+      detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${detailParts.join(" — ")} supprimé(e)`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: entry.stationId,
@@ -545,7 +566,7 @@ export class CashEntriesService {
     return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
   }
 
-  /** Supprime un versement (TPE et/ou Gaz et/ou Lubrifiants) saisi par erreur. */
+  /** Supprime un versement (Gaz et/ou Lubrifiants) saisi par erreur. */
   async supprimerVersement(cashEntryId: string, versementId: string, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
       where: { id: cashEntryId },
@@ -706,9 +727,13 @@ export class CashEntriesService {
     const montantCarburant = pumpReadingsMaj.reduce((s, p) => s + p.montantCalcule, 0);
 
     // Cash physique = somme de toutes les remises en caisse reçues pendant le quart (plus de
-    // billetage manuel obligatoire) — TPE, Gaz et Lubrifiants = somme des versements progressifs.
+    // billetage manuel obligatoire). TPE = somme du TPE propre à chaque pompe (RemiseCaisse) +
+    // les éventuels versements TPE historiques (VersementProduit, saisis avant que le TPE ne
+    // devienne propre à chaque pompe). Gaz et Lubrifiants = somme des versements progressifs.
     const montant = entry.pumpReadings.reduce((s, r) => s + r.remises.reduce((s2, rm) => s2 + Number(rm.montant), 0), 0);
-    const montantTpe = entry.versements.reduce((s, v) => s + Number(v.montantTpe), 0);
+    const montantTpe =
+      entry.pumpReadings.reduce((s, r) => s + r.remises.reduce((s2, rm) => s2 + Number(rm.montantTpe), 0), 0) +
+      entry.versements.reduce((s, v) => s + Number(v.montantTpe), 0);
     const montantGpl = entry.versements.reduce((s, v) => s + Number(v.montantGpl), 0);
     const quantiteGpl125Pleine = entry.versements.reduce((s, v) => s + v.quantiteGpl125Pleine, 0);
     const quantiteGpl125Consigne = entry.versements.reduce((s, v) => s + v.quantiteGpl125Consigne, 0);
@@ -738,7 +763,11 @@ export class CashEntriesService {
     const totalPieces = denominations.filter((d) => d.type === "PIECE").reduce((s, d) => s + d.valeurFaciale * d.quantite, 0);
     const ecartComptage = denominations.length > 0 ? totalBillets + totalPieces - montant : null;
 
-    const montantGlobal = montant + montantTpe;
+    // Cash Global = tout ce qui a été reçu (cash + TPE carburant, et Gaz/Lubrifiants — également
+    // vendus et encaissés, mais sans compteur physique à vérifier). Comparé au Total théorique
+    // (Carburant+Gaz+Lubrifiants), Gaz et Lubrifiants s'annulent des deux côtés : l'écart se
+    // recentre ainsi sur le seul écart carburant (cash/TPE remis vs. index de pompe réel).
+    const montantGlobal = montant + montantTpe + montantGpl + montantLubrifiants;
     const ecart = montantGlobal - (montantCarburant + montantGpl + montantLubrifiants);
 
     await this.prisma.$transaction([
@@ -784,7 +813,7 @@ export class CashEntriesService {
       categorie: "ENCAISSEMENT",
       action: "Quart clôturé",
       detail:
-        `Quart ${entry.quart} — Cash physique ${fcfa(montant)} + TPE ${fcfa(montantTpe)} = Global ${fcfa(montantGlobal)} — ` +
+        `Quart ${entry.quart} — Cash physique ${fcfa(montant)} + TPE ${fcfa(montantTpe)} + Gaz ${fcfa(montantGpl)} + Lubrifiants ${fcfa(montantLubrifiants)} = Global ${fcfa(montantGlobal)} — ` +
         `Carburant+Gaz+Lubrifiants calculé ${fcfa(montantCarburant + montantGpl + montantLubrifiants)} — Écart ${fcfa(ecart)}` +
         (ecartComptage !== null && Math.abs(ecartComptage) > 0.01
           ? ` — ⚠ Comptage de vérification différent des remises de ${fcfa(ecartComptage)}`

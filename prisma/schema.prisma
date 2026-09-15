@@ -145,14 +145,33 @@ model Station {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users       User[]
-  attendants  Attendant[]
-  pumps       Pump[]
-  cashEntries CashEntry[]
-  deposits    Deposit[]
-  auditLogs   AuditLog[]
+  users         User[]
+  attendants    Attendant[]
+  pumps         Pump[]
+  distributeurs Distributeur[]
+  cashEntries   CashEntry[]
+  deposits      Deposit[]
+  auditLogs     AuditLog[]
 
   @@map("stations")
+}
+
+// Îlot physique regroupant plusieurs pompes (généralement jusqu'à 4 : essence,
+// gasoil, pétrole). Affecter un distributeur à un pompiste à l'ouverture d'un
+// quart lui assigne d'un coup toutes les pompes actives de ce distributeur.
+model Distributeur {
+  id        String   @id @default(cuid())
+  stationId String
+  station   Station  @relation(fields: [stationId], references: [id])
+  nom       String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pumps Pump[]
+
+  @@map("distributeurs")
+  @@unique([stationId, nom])
+  @@index([stationId])
 }
 
 model Attendant {
@@ -220,19 +239,22 @@ model Bank {
 // ── Pompes ────────────────────────────────────────────────────
 
 model Pump {
-  id        String      @id @default(cuid())
-  stationId String
-  station   Station     @relation(fields: [stationId], references: [id])
-  code      String
-  produit   Produit
-  statut    StatutPompe @default(ACTIF)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  id             String        @id @default(cuid())
+  stationId      String
+  station        Station       @relation(fields: [stationId], references: [id])
+  distributeurId String
+  distributeur   Distributeur @relation(fields: [distributeurId], references: [id])
+  code           String
+  produit        Produit
+  statut         StatutPompe   @default(ACTIF)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   pumpReadings PumpReading[]
 
   @@map("pumps")
   @@unique([stationId, code])
+  @@index([distributeurId])
   @@index([stationId])
 }
 
@@ -296,7 +318,7 @@ model CashEntry {
   montant      Decimal @db.Decimal(14, 2) @default(0) // cash physique = somme des remises en caisse reçues pendant le quart
 
   montantTpe    Decimal @db.Decimal(14, 2) @default(0) // ventes carte (TPE), déjà bancarisées, jamais physiques
-  montantGlobal Decimal @db.Decimal(14, 2) @default(0) // montant + montantTpe — sert de référence pour l'écart
+  montantGlobal Decimal @db.Decimal(14, 2) @default(0) // montant + montantTpe + montantGpl + montantLubrifiants — sert de référence pour l'écart
 
   quantiteGpl125Pleine          Int @default(0)
   quantiteGpl125Consigne        Int @default(0)
@@ -341,8 +363,9 @@ model PumpReading {
   pumpId         String
   pump           Pump      @relation(fields: [pumpId], references: [id])
   indexOuverture Decimal   @db.Decimal(12, 2)
-  // Estimation vivante = indexOuverture + Σ(litres des remises en caisse déjà
-  // enregistrées) — mise à jour à chaque remise, tant que le quart est EN_COURS.
+  // Estimation vivante = indexOuverture + Σ(litres correspondant au cash ET au TPE de chaque
+  // remise déjà enregistrée — un client qui paie par carte fait aussi tourner le compteur) —
+  // mise à jour à chaque remise, tant que le quart est EN_COURS.
   indexCourant   Decimal?  @db.Decimal(12, 2)
   // Relevé réel du compteur, saisi par la gérante à la clôture du quart —
   // seule valeur qui sert au calcul financier final (peut différer légèrement
@@ -362,13 +385,18 @@ model PumpReading {
 // Remise en caisse mid-quart : le pompiste ne doit pas garder plus de
 // 100 000 FCFA dans sa "banane" sur la piste de vente — il reverse donc son
 // cash à la gérante en plusieurs fois pendant le service. Chaque remise fait
-// avancer indexCourant de PumpReading d'autant de litres (montant / prix au
-// litre du produit de la pompe, au moment de la remise).
+// avancer indexCourant de PumpReading d'autant de litres ((montant + montantTpe)
+// / prix au litre du produit de la pompe, au moment de la remise) — le TPE fait
+// aussi tourner le compteur physique, au même titre que le cash.
 model RemiseCaisse {
   id            String      @id @default(cuid())
   pumpReadingId String
   pumpReading   PumpReading @relation(fields: [pumpReadingId], references: [id])
   montant       Decimal     @db.Decimal(12, 2)
+  // TPE propre à cette pompe (ex. TPE-(S1-A)), saisi dans le même geste que le cash remis.
+  montantTpe    Decimal     @db.Decimal(12, 2) @default(0)
+  // Litres correspondant à (montant + montantTpe) au prix du produit — ce sont eux qui font
+  // avancer PumpReading.indexCourant, pas le seul cash.
   litres        Decimal     @db.Decimal(12, 2)
   createdAt     DateTime    @default(now())
 
@@ -376,13 +404,9 @@ model RemiseCaisse {
   @@index([pumpReadingId])
 }
 
-// Versement progressif TPE/Gaz/Lubrifiants en cours de quart : au même moment
-// où un pompiste remet son cash (RemiseCaisse), il peut aussi déclarer ses
-// ventes carte (TPE) et, pour le/la responsable Gaz/Lubrifiants du quart, les
-// bouteilles ou bidons vendus depuis le dernier versement. Ces lignes sont
-// agrégées à la clôture pour fixer CashEntry.montantTpe/montantGpl/
-// montantLubrifiants — il n'y a plus de saisie unique de ces montants à la
-// clôture.
+// Versement progressif Gaz/Lubrifiants en cours de quart, déclaré par le/la
+// responsable Gaz/Lubrifiants du quart. Ces lignes sont agrégées à la
+// clôture pour fixer CashEntry.montantGpl/montantLubrifiants.
 model VersementProduit {
   id          String    @id @default(cuid())
   cashEntryId String
@@ -391,6 +415,9 @@ model VersementProduit {
   attendant   Attendant @relation(fields: [attendantId], references: [id])
   createdAt   DateTime  @default(now())
 
+  // Conservé pour compatibilité avec les versements TPE historiques saisis avant que le TPE
+  // ne devienne propre à chaque pompe (RemiseCaisse.montantTpe) — plus jamais renseigné par
+  // les nouvelles saisies, mais toujours sommé à la clôture pour ne pas perdre ces montants.
   montantTpe Decimal @db.Decimal(12, 2) @default(0)
 
   quantiteGpl125Pleine          Int @default(0)

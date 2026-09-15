@@ -5,4 +5,5 @@ export class UpdatePumpDto {
   @IsOptional() @IsString() code?: string;
   @IsOptional() @IsEnum(Produit) produit?: Produit;
   @IsOptional() @IsEnum(StatutPompe) statut?: StatutPompe;
+  @IsOptional() @IsString() distributeurId?: string;
 }

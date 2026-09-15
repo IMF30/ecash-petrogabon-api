@@ -33,6 +33,35 @@ export const DEFAULT_PUMP_CODES: { code: string; produit: Produit }[] = [
   ]),
 ];
 
+/**
+ * Regroupe une liste de pompes par distributeur (îlot physique), déduit du numéro dans le code
+ * (ex. "S1-A" et "G1-B" partagent le numéro 1 → "Distributeur 1"). Le Pétrole ne se mélange
+ * jamais avec l'Essence/Gasoil : une pompe Pétrole a toujours son propre distributeur dédié
+ * (ex. "P1-A" → "Distributeur Pétrole 1"), même si son numéro coïncide avec un distributeur
+ * essence/gasoil existant. Une pompe dont le code ne suit pas ce format reçoit aussi son propre
+ * distributeur dédié, pour ne jamais rien laisser orphelin.
+ */
+export function regrouperPompesParDistributeur(
+  pompes: { code: string; produit: Produit }[],
+): Map<string, { code: string; produit: Produit }[]> {
+  const groupes = new Map<string, { code: string; produit: Produit }[]>();
+  for (const pompe of pompes) {
+    const numero = pompe.code.match(/^[A-Za-z]+(\d+)-/)?.[1];
+    let nomDistributeur: string;
+    if (numero === undefined) {
+      nomDistributeur = `Distributeur ${pompe.code}`;
+    } else if (pompe.produit === "PETROLE") {
+      nomDistributeur = `Distributeur Pétrole ${numero}`;
+    } else {
+      nomDistributeur = `Distributeur ${numero}`;
+    }
+    const liste = groupes.get(nomDistributeur) ?? [];
+    liste.push(pompe);
+    groupes.set(nomDistributeur, liste);
+  }
+  return groupes;
+}
+
 @Injectable()
 export class StationsService {
   constructor(
@@ -52,10 +81,15 @@ export class StationsService {
 
   async create(dto: CreateStationDto, actor: JwtPayload) {
     const created = await this.prisma.station.create({ data: dto });
-    // Toute nouvelle station reçoit automatiquement le parc de pompes par défaut (voir DEFAULT_PUMP_CODES).
-    await this.prisma.pump.createMany({
-      data: DEFAULT_PUMP_CODES.map((p) => ({ ...p, stationId: created.id })),
-    });
+    // Toute nouvelle station reçoit automatiquement le parc de pompes par défaut (voir
+    // DEFAULT_PUMP_CODES), déjà organisées en distributeurs (îlots physiques).
+    const groupes = regrouperPompesParDistributeur(DEFAULT_PUMP_CODES);
+    for (const [nom, pompes] of groupes) {
+      const distributeur = await this.prisma.distributeur.create({ data: { nom, stationId: created.id } });
+      await this.prisma.pump.createMany({
+        data: pompes.map((p) => ({ ...p, stationId: created.id, distributeurId: distributeur.id })),
+      });
+    }
     await this.auditService.record({
       categorie: "STATION",
       action: "Station créée",
