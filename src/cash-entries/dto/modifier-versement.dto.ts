@@ -1,5 +1,6 @@
 import { Type } from "class-transformer";
-import { IsArray, IsInt, IsOptional, IsString, Min, ValidateNested } from "class-validator";
+import { IsArray, IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from "class-validator";
+import { ModePaiement } from "@prisma/client";
 
 class LubricantSaleInputDto {
   @IsString() lubricantFormatId!: string;
@@ -20,6 +21,7 @@ export class ModifierVersementDto {
   @IsOptional() @IsInt() @Min(0) quantiteGpl35Pleine?: number;
   @IsOptional() @IsInt() @Min(0) quantiteGpl35Consigne?: number;
   @IsOptional() @IsInt() @Min(0) quantiteGpl35ConsigneRecharge?: number;
+  @IsOptional() @IsEnum(ModePaiement) modePaiementGpl?: ModePaiement;
 
   @IsOptional()
   @IsArray()

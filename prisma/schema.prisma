@@ -58,6 +58,13 @@ enum StatutPompe {
   INACTIF
 }
 
+// Mode de paiement d'une vente Gaz : la plupart sont payées cash, mais une vente TPE-Gaz est
+// possible (paiement carte). Détermine si le montant s'ajoute au Cash Physique ou au TPE du quart.
+enum ModePaiement {
+  CASH
+  TPE
+}
+
 enum StatutProduit {
   ACTIF
   INACTIF
@@ -427,6 +434,9 @@ model VersementProduit {
   quantiteGpl35Consigne         Int @default(0)
   quantiteGpl35ConsigneRecharge  Int @default(0)
   montantGpl                    Decimal @db.Decimal(12, 2) @default(0)
+  // Mode de paiement de la vente Gaz de cette ligne (CASH par défaut) — les Lubrifiants sont
+  // toujours considérés cash, ce champ ne s'applique donc qu'aux lignes portant du Gaz.
+  modePaiement                  ModePaiement @default(CASH)
 
   lubricantSales VersementLubrifiantSale[]
 

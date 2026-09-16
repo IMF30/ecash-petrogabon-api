@@ -1,5 +1,6 @@
 import { Type } from "class-transformer";
-import { ArrayMinSize, IsArray, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from "class-validator";
+import { ModePaiement } from "@prisma/client";
 
 class RemiseInputDto {
   @IsString() pumpReadingId!: string;
@@ -36,6 +37,9 @@ export class VersementProduitDto {
   @IsOptional() @IsInt() @Min(0) quantiteGpl35Pleine?: number;
   @IsOptional() @IsInt() @Min(0) quantiteGpl35Consigne?: number;
   @IsOptional() @IsInt() @Min(0) quantiteGpl35ConsigneRecharge?: number;
+  // Mode de paiement de la vente Gaz (CASH par défaut) — une vente TPE-Gaz est possible.
+  // Sans effet si aucune quantité de Gaz n'est renseignée.
+  @IsOptional() @IsEnum(ModePaiement) modePaiementGpl?: ModePaiement;
 
   @IsOptional()
   @IsArray()

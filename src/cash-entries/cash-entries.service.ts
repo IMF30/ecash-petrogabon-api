@@ -261,6 +261,9 @@ export class CashEntriesService {
     const qteGpl35ConsigneRecharge = dto.quantiteGpl35ConsigneRecharge ?? 0;
     const lubricantSalesDto = dto.lubricantSales ?? [];
     const aUneVenteGpl = qteGpl125Pleine + qteGpl125Consigne + qteGpl125ConsigneRecharge + qteGpl35Pleine + qteGpl35Consigne + qteGpl35ConsigneRecharge > 0;
+    // Une vente Gaz est presque toujours payée cash, mais une vente TPE-Gaz est possible.
+    // Sans effet sur les Lubrifiants, toujours considérés cash.
+    const modePaiementGpl = dto.modePaiementGpl ?? "CASH";
 
     if (remisesDto.length === 0 && !aUneVenteGpl && lubricantSalesDto.length === 0) {
       throw new BadRequestException("Renseignez au moins un montant remis ou TPE pour une pompe, une vente de gaz ou une vente de lubrifiant.");
@@ -337,6 +340,7 @@ export class CashEntriesService {
                 quantiteGpl35Consigne: qteGpl35Consigne,
                 quantiteGpl35ConsigneRecharge: qteGpl35ConsigneRecharge,
                 montantGpl,
+                modePaiement: modePaiementGpl,
                 lubricantSales: { create: lubricantSalesData },
               },
             }),
@@ -351,7 +355,7 @@ export class CashEntriesService {
     const detailParts = [
       remisesAEnregistrer.length > 0 && `Cash : ${remisesAEnregistrer.map((r) => `${r.pumpCode} ${fcfa(r.montant)}`).join(", ")}`,
       montantTpeTotal > 0 && `TPE : ${remisesAEnregistrer.filter((r) => r.montantTpe > 0).map((r) => `TPE-(${r.pumpCode}) ${fcfa(r.montantTpe)}`).join(", ")}`,
-      aUneVenteGpl && `Gaz ${fcfa(montantGpl)}`,
+      aUneVenteGpl && `Gaz ${fcfa(montantGpl)} (${modePaiementGpl === "TPE" ? "TPE" : "Cash"})`,
       lubricantSalesData.length > 0 && `Lubrifiants ${fcfa(lubricantSalesData.reduce((s, v) => s + v.montantCalcule, 0))}`,
     ].filter(Boolean);
     await this.auditService.record({
@@ -440,9 +444,11 @@ export class CashEntriesService {
     if (!versement) throw new NotFoundException("Versement introuvable pour ce quart.");
 
     const ancienMontantGpl = Number(versement.montantGpl);
+    const ancienModePaiement = versement.modePaiement;
     const ancienMontantLub = versement.lubricantSales.reduce((s, ls) => s + Number(ls.montantCalcule), 0);
 
     const prixConfig = await this.pricesService.get();
+    const modePaiement = dto.modePaiementGpl ?? ancienModePaiement;
 
     const aGplFourni =
       dto.quantiteGpl125Pleine !== undefined || dto.quantiteGpl125Consigne !== undefined || dto.quantiteGpl125ConsigneRecharge !== undefined ||
@@ -492,6 +498,7 @@ export class CashEntriesService {
           quantiteGpl125Pleine, quantiteGpl125Consigne, quantiteGpl125ConsigneRecharge,
           quantiteGpl35Pleine, quantiteGpl35Consigne, quantiteGpl35ConsigneRecharge,
           montantGpl,
+          modePaiement,
         },
       }),
       ...(lubricantSalesData !== null
@@ -504,6 +511,7 @@ export class CashEntriesService {
 
     const detailParts = [
       montantGpl !== ancienMontantGpl && `Gaz ${fcfa(ancienMontantGpl)} → ${fcfa(montantGpl)}`,
+      modePaiement !== ancienModePaiement && `Mode de paiement Gaz ${ancienModePaiement === "TPE" ? "TPE" : "Cash"} → ${modePaiement === "TPE" ? "TPE" : "Cash"}`,
       nouveauMontantLub !== ancienMontantLub && `Lubrifiants ${fcfa(ancienMontantLub)} → ${fcfa(nouveauMontantLub)}`,
     ].filter(Boolean);
     await this.auditService.record({
