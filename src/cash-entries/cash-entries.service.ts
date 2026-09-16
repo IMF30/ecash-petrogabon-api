@@ -735,14 +735,18 @@ export class CashEntriesService {
     const montantCarburant = pumpReadingsMaj.reduce((s, p) => s + p.montantCalcule, 0);
 
     // Cash physique = somme de toutes les remises en caisse reçues pendant le quart (plus de
-    // billetage manuel obligatoire). TPE = somme du TPE propre à chaque pompe (RemiseCaisse) +
-    // les éventuels versements TPE historiques (VersementProduit, saisis avant que le TPE ne
-    // devienne propre à chaque pompe). Gaz et Lubrifiants = somme des versements progressifs.
-    const montant = entry.pumpReadings.reduce((s, r) => s + r.remises.reduce((s2, rm) => s2 + Number(rm.montant), 0), 0);
+    // billetage manuel obligatoire) + les ventes Gaz payées cash. TPE = somme du TPE propre à
+    // chaque pompe (RemiseCaisse) + les éventuels versements TPE historiques (VersementProduit,
+    // saisis avant que le TPE ne devienne propre à chaque pompe) + les ventes Gaz payées TPE.
+    // Lubrifiants = somme des versements progressifs.
+    const montantGplCash = entry.versements.reduce((s, v) => s + (v.modePaiement === "CASH" ? Number(v.montantGpl) : 0), 0);
+    const montantGplTpe = entry.versements.reduce((s, v) => s + (v.modePaiement === "TPE" ? Number(v.montantGpl) : 0), 0);
+    const montant = entry.pumpReadings.reduce((s, r) => s + r.remises.reduce((s2, rm) => s2 + Number(rm.montant), 0), 0) + montantGplCash;
     const montantTpe =
       entry.pumpReadings.reduce((s, r) => s + r.remises.reduce((s2, rm) => s2 + Number(rm.montantTpe), 0), 0) +
-      entry.versements.reduce((s, v) => s + Number(v.montantTpe), 0);
-    const montantGpl = entry.versements.reduce((s, v) => s + Number(v.montantGpl), 0);
+      entry.versements.reduce((s, v) => s + Number(v.montantTpe), 0) +
+      montantGplTpe;
+    const montantGpl = montantGplCash + montantGplTpe;
     const quantiteGpl125Pleine = entry.versements.reduce((s, v) => s + v.quantiteGpl125Pleine, 0);
     const quantiteGpl125Consigne = entry.versements.reduce((s, v) => s + v.quantiteGpl125Consigne, 0);
     const quantiteGpl125ConsigneRecharge = entry.versements.reduce((s, v) => s + v.quantiteGpl125ConsigneRecharge, 0);
@@ -771,11 +775,12 @@ export class CashEntriesService {
     const totalPieces = denominations.filter((d) => d.type === "PIECE").reduce((s, d) => s + d.valeurFaciale * d.quantite, 0);
     const ecartComptage = denominations.length > 0 ? totalBillets + totalPieces - montant : null;
 
-    // Cash Global = tout ce qui a été reçu (cash + TPE carburant, et Gaz/Lubrifiants — également
-    // vendus et encaissés, mais sans compteur physique à vérifier). Comparé au Total théorique
+    // Cash Global = tout ce qui a été reçu (cash + TPE carburant, et Lubrifiants — également
+    // vendus et encaissés, mais sans compteur physique à vérifier ; le Gaz est déjà compté dans
+    // montant/montantTpe selon son mode de paiement). Comparé au Total théorique
     // (Carburant+Gaz+Lubrifiants), Gaz et Lubrifiants s'annulent des deux côtés : l'écart se
     // recentre ainsi sur le seul écart carburant (cash/TPE remis vs. index de pompe réel).
-    const montantGlobal = montant + montantTpe + montantGpl + montantLubrifiants;
+    const montantGlobal = montant + montantTpe + montantLubrifiants;
     const ecart = montantGlobal - (montantCarburant + montantGpl + montantLubrifiants);
 
     await this.prisma.$transaction([
@@ -821,7 +826,7 @@ export class CashEntriesService {
       categorie: "ENCAISSEMENT",
       action: "Quart clôturé",
       detail:
-        `Quart ${entry.quart} — Cash physique ${fcfa(montant)} + TPE ${fcfa(montantTpe)} + Gaz ${fcfa(montantGpl)} + Lubrifiants ${fcfa(montantLubrifiants)} = Global ${fcfa(montantGlobal)} — ` +
+        `Quart ${entry.quart} — Cash physique ${fcfa(montant)} (dont Gaz cash ${fcfa(montantGplCash)}) + TPE ${fcfa(montantTpe)} (dont Gaz TPE ${fcfa(montantGplTpe)}) + Lubrifiants ${fcfa(montantLubrifiants)} = Global ${fcfa(montantGlobal)} — ` +
         `Carburant+Gaz+Lubrifiants calculé ${fcfa(montantCarburant + montantGpl + montantLubrifiants)} — Écart ${fcfa(ecart)}` +
         (ecartComptage !== null && Math.abs(ecartComptage) > 0.01
           ? ` — ⚠ Comptage de vérification différent des remises de ${fcfa(ecartComptage)}`
