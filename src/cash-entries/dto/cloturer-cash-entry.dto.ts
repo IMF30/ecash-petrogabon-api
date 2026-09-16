@@ -15,8 +15,8 @@ class PumpReadingClotureDto {
 
 /**
  * Clôture un quart EN_COURS : relevés réels de fermeture par pompe. Le cash
- * physique, le TPE, le Gaz et les Lubrifiants sont désormais entièrement
- * dérivés des versements progressifs saisis pendant le quart (remises et
+ * physique, le TPE et le Gaz sont désormais entièrement dérivés des
+ * versements progressifs saisis pendant le quart (remises et
  * VersementProduit) — plus aucune saisie manuelle de ces montants ici.
  * `denominations` reste un comptage optionnel de vérification (n'alimente
  * plus le cash physique officiel, sert seulement à signaler un écart).

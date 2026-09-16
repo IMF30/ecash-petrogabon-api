@@ -31,14 +31,12 @@ const INCLUDE_COMPLET = {
   // apparaître les pompes/pompistes dans un ordre différent côté UI — l'id (cuid, ordonné dans
   // le temps) donne un ordre stable et correspond à l'ordre d'ajout à l'ouverture du quart.
   pumpReadings: { include: { pump: true, attendant: true, remises: { orderBy: { createdAt: "asc" as const } } }, orderBy: { id: "asc" as const } },
-  lubricantSales: { include: { lubricantFormat: { include: { lubricantProduct: true } } } },
   versements: {
-    include: { attendant: true, lubricantSales: { include: { lubricantFormat: { include: { lubricantProduct: true } } } } },
+    include: { attendant: true },
     orderBy: { createdAt: "asc" as const },
   },
   responsableQuart: true,
   responsableGpl: true,
-  responsableLubrifiants: true,
 };
 
 @Injectable()
@@ -123,7 +121,7 @@ export class CashEntriesService {
     }
 
     const attendantIds = [
-      ...new Set([dto.responsableQuartId, dto.responsableGplId, dto.responsableLubrifiantsId, ...dto.pumpReadings.map((p) => p.attendantId)]),
+      ...new Set([dto.responsableQuartId, dto.responsableGplId, ...dto.pumpReadings.map((p) => p.attendantId)]),
     ];
     const attendants = await this.prisma.attendant.findMany({ where: { id: { in: attendantIds } } });
     if (attendants.length !== attendantIds.length || attendants.some((a) => a.stationId !== dto.stationId)) {
@@ -146,8 +144,8 @@ export class CashEntriesService {
     }
 
     // Règle métier : un pompiste ne peut être affecté qu'à un seul quart par jour, tous rôles confondus
-    // (responsable de quart, GPL, lubrifiants ou pompiste). On récupère donc tous les encaissements du
-    // même jour sur les AUTRES quarts de cette station pour détecter un pompiste déjà affecté ailleurs.
+    // (responsable de quart, GPL ou pompiste). On récupère donc tous les encaissements du même jour
+    // sur les AUTRES quarts de cette station pour détecter un pompiste déjà affecté ailleurs.
     const entriesMemeJourAutreQuart = await this.prisma.cashEntry.findMany({
       where: { stationId: dto.stationId, date, quart: { not: dto.quart } },
       include: { pumpReadings: true },
@@ -156,7 +154,6 @@ export class CashEntriesService {
     for (const e of entriesMemeJourAutreQuart) {
       attendantIdsDejaAffectes.add(e.responsableQuartId);
       attendantIdsDejaAffectes.add(e.responsableGplId);
-      attendantIdsDejaAffectes.add(e.responsableLubrifiantsId);
       for (const r of e.pumpReadings) attendantIdsDejaAffectes.add(r.attendantId);
     }
     const conflits = attendants.filter((a) => attendantIdsDejaAffectes.has(a.id));
@@ -186,7 +183,6 @@ export class CashEntriesService {
           statut: "EN_COURS",
           responsableQuartId: dto.responsableQuartId,
           responsableGplId: dto.responsableGplId,
-          responsableLubrifiantsId: dto.responsableLubrifiantsId,
           pumpReadings: {
             create: dto.pumpReadings.map((r) => ({
               attendantId: r.attendantId,
@@ -224,10 +220,10 @@ export class CashEntriesService {
    * dans sa "banane" sur la piste de vente, il reverse donc régulièrement son cash à la
    * gérante, pompe par pompe (fait avancer l'index courant de chaque pompe concernée —
    * montant / prix au litre du produit). Dans le même geste, il ou elle peut aussi déclarer
-   * ses ventes carte (TPE) et, pour le/la responsable Gaz/Lubrifiants du quart, les
-   * bouteilles ou bidons vendus depuis le dernier versement. Rien n'attend la clôture du
-   * quart — c'est ce qui permet à la Trésorerie et au Contrôle Interne de voir le cash
-   * physique et les ventes se constituer en temps réel.
+   * ses ventes carte (TPE) et, pour le/la responsable Gaz du quart, les bouteilles vendues
+   * depuis le dernier versement. Rien n'attend la clôture du quart — c'est ce qui permet à
+   * la Trésorerie et au Contrôle Interne de voir le cash physique et les ventes se
+   * constituer en temps réel.
    */
   async enregistrerVersement(cashEntryId: string, dto: VersementProduitDto, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
@@ -243,7 +239,7 @@ export class CashEntriesService {
     }
 
     const attendantsImpliques = new Set([
-      entry.responsableQuartId, entry.responsableGplId, entry.responsableLubrifiantsId,
+      entry.responsableQuartId, entry.responsableGplId,
       ...entry.pumpReadings.map((r) => r.attendantId),
     ]);
     if (!attendantsImpliques.has(dto.attendantId)) {
@@ -259,14 +255,12 @@ export class CashEntriesService {
     const qteGpl35Pleine = dto.quantiteGpl35Pleine ?? 0;
     const qteGpl35Consigne = dto.quantiteGpl35Consigne ?? 0;
     const qteGpl35ConsigneRecharge = dto.quantiteGpl35ConsigneRecharge ?? 0;
-    const lubricantSalesDto = dto.lubricantSales ?? [];
     const aUneVenteGpl = qteGpl125Pleine + qteGpl125Consigne + qteGpl125ConsigneRecharge + qteGpl35Pleine + qteGpl35Consigne + qteGpl35ConsigneRecharge > 0;
     // Une vente Gaz est presque toujours payée cash, mais une vente TPE-Gaz est possible.
-    // Sans effet sur les Lubrifiants, toujours considérés cash.
     const modePaiementGpl = dto.modePaiementGpl ?? "CASH";
 
-    if (remisesDto.length === 0 && !aUneVenteGpl && lubricantSalesDto.length === 0) {
-      throw new BadRequestException("Renseignez au moins un montant remis ou TPE pour une pompe, une vente de gaz ou une vente de lubrifiant.");
+    if (remisesDto.length === 0 && !aUneVenteGpl) {
+      throw new BadRequestException("Renseignez au moins un montant remis ou TPE pour une pompe, ou une vente de gaz.");
     }
 
     const prixConfig = await this.pricesService.get();
@@ -299,27 +293,6 @@ export class CashEntriesService {
       qteGpl35Consigne * Number(prixConfig.prixGpl35Consigne) +
       qteGpl35ConsigneRecharge * Number(prixConfig.prixGpl35ConsigneRecharge);
 
-    const lubricantFormatIdsBruts = lubricantSalesDto.map((v) => v.lubricantFormatId);
-    if (new Set(lubricantFormatIdsBruts).size !== lubricantFormatIdsBruts.length) {
-      throw new BadRequestException("Un même format de lubrifiant ne peut être saisi qu'une seule fois par versement.");
-    }
-    const lubricantFormats = lubricantFormatIdsBruts.length
-      ? await this.prisma.lubricantFormat.findMany({ where: { id: { in: lubricantFormatIdsBruts } }, include: { lubricantProduct: true } })
-      : [];
-    if (lubricantFormats.length !== new Set(lubricantFormatIdsBruts).size) {
-      throw new BadRequestException("Un ou plusieurs formats de lubrifiant sont introuvables.");
-    }
-    if (lubricantFormats.some((f) => f.statut !== "ACTIF" || f.lubricantProduct.statut !== "ACTIF")) {
-      throw new BadRequestException("Un ou plusieurs formats de lubrifiant sont inactifs et ne peuvent plus être vendus.");
-    }
-    const lubricantFormatById = new Map(lubricantFormats.map((f) => [f.id, f]));
-    const lubricantSalesData = lubricantSalesDto.map((v) => {
-      const format = lubricantFormatById.get(v.lubricantFormatId)!;
-      return { lubricantFormatId: v.lubricantFormatId, quantite: v.quantite, montantCalcule: v.quantite * Number(format.prixUnitaire) };
-    });
-
-    const aUnVersementProduit = aUneVenteGpl || lubricantSalesData.length > 0;
-
     const resultatsTransaction = await this.prisma.$transaction([
       ...remisesAEnregistrer.flatMap((r) => [
         this.prisma.remiseCaisse.create({
@@ -327,7 +300,7 @@ export class CashEntriesService {
         }),
         this.prisma.pumpReading.update({ where: { id: r.pumpReadingId }, data: { indexCourant: r.indexCourant } }),
       ]),
-      ...(aUnVersementProduit
+      ...(aUneVenteGpl
         ? [
             this.prisma.versementProduit.create({
               data: {
@@ -341,7 +314,6 @@ export class CashEntriesService {
                 quantiteGpl35ConsigneRecharge: qteGpl35ConsigneRecharge,
                 montantGpl,
                 modePaiement: modePaiementGpl,
-                lubricantSales: { create: lubricantSalesData },
               },
             }),
           ]
@@ -356,7 +328,6 @@ export class CashEntriesService {
       remisesAEnregistrer.length > 0 && `Cash : ${remisesAEnregistrer.map((r) => `${r.pumpCode} ${fcfa(r.montant)}`).join(", ")}`,
       montantTpeTotal > 0 && `TPE : ${remisesAEnregistrer.filter((r) => r.montantTpe > 0).map((r) => `TPE-(${r.pumpCode}) ${fcfa(r.montantTpe)}`).join(", ")}`,
       aUneVenteGpl && `Gaz ${fcfa(montantGpl)} (${modePaiementGpl === "TPE" ? "TPE" : "Cash"})`,
-      lubricantSalesData.length > 0 && `Lubrifiants ${fcfa(lubricantSalesData.reduce((s, v) => s + v.montantCalcule, 0))}`,
     ].filter(Boolean);
     await this.auditService.record({
       categorie: "ENCAISSEMENT",
@@ -421,16 +392,14 @@ export class CashEntriesService {
   }
 
   /**
-   * Corrige un versement déjà enregistré (Gaz et/ou Lubrifiants — erreur de saisie ; le TPE se
-   * corrige désormais par pompe via modifierRemise). Un champ omis dans le corps de la requête
-   * reste inchangé ; le Gaz n'est recalculé que si l'une de ses quantités est fournie, et les
-   * Lubrifiants ne sont remplacés que si `lubricantSales` est fourni — pour ne jamais faire
-   * dériver silencieusement une partie du versement qui n'était pas concernée par la correction.
+   * Corrige un versement Gaz déjà enregistré (erreur de saisie ; le TPE se corrige désormais
+   * par pompe via modifierRemise). Un champ omis dans le corps de la requête reste inchangé ;
+   * le Gaz n'est recalculé que si l'une de ses quantités est fournie.
    */
   async modifierVersement(cashEntryId: string, versementId: string, dto: ModifierVersementDto, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
       where: { id: cashEntryId },
-      include: { versements: { include: { attendant: true, lubricantSales: true } } },
+      include: { versements: { include: { attendant: true } } },
     });
     if (!entry) throw new NotFoundException("Quart introuvable.");
     if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
@@ -445,7 +414,6 @@ export class CashEntriesService {
 
     const ancienMontantGpl = Number(versement.montantGpl);
     const ancienModePaiement = versement.modePaiement;
-    const ancienMontantLub = versement.lubricantSales.reduce((s, ls) => s + Number(ls.montantCalcule), 0);
 
     const prixConfig = await this.pricesService.get();
     const modePaiement = dto.modePaiementGpl ?? ancienModePaiement;
@@ -468,51 +436,19 @@ export class CashEntriesService {
         quantiteGpl35ConsigneRecharge * Number(prixConfig.prixGpl35ConsigneRecharge)
       : ancienMontantGpl;
 
-    let lubricantSalesData: { lubricantFormatId: string; quantite: number; montantCalcule: number }[] | null = null;
-    if (dto.lubricantSales !== undefined) {
-      const lubricantFormatIdsBruts = dto.lubricantSales.map((v) => v.lubricantFormatId);
-      if (new Set(lubricantFormatIdsBruts).size !== lubricantFormatIdsBruts.length) {
-        throw new BadRequestException("Un même format de lubrifiant ne peut être saisi qu'une seule fois par versement.");
-      }
-      const lubricantFormats = lubricantFormatIdsBruts.length
-        ? await this.prisma.lubricantFormat.findMany({ where: { id: { in: lubricantFormatIdsBruts } }, include: { lubricantProduct: true } })
-        : [];
-      if (lubricantFormats.length !== new Set(lubricantFormatIdsBruts).size) {
-        throw new BadRequestException("Un ou plusieurs formats de lubrifiant sont introuvables.");
-      }
-      if (lubricantFormats.some((f) => f.statut !== "ACTIF" || f.lubricantProduct.statut !== "ACTIF")) {
-        throw new BadRequestException("Un ou plusieurs formats de lubrifiant sont inactifs et ne peuvent plus être vendus.");
-      }
-      const lubricantFormatById = new Map(lubricantFormats.map((f) => [f.id, f]));
-      lubricantSalesData = dto.lubricantSales.map((v) => {
-        const format = lubricantFormatById.get(v.lubricantFormatId)!;
-        return { lubricantFormatId: v.lubricantFormatId, quantite: v.quantite, montantCalcule: v.quantite * Number(format.prixUnitaire) };
-      });
-    }
-    const nouveauMontantLub = lubricantSalesData !== null ? lubricantSalesData.reduce((s, v) => s + v.montantCalcule, 0) : ancienMontantLub;
-
-    await this.prisma.$transaction([
-      this.prisma.versementProduit.update({
-        where: { id: versementId },
-        data: {
-          quantiteGpl125Pleine, quantiteGpl125Consigne, quantiteGpl125ConsigneRecharge,
-          quantiteGpl35Pleine, quantiteGpl35Consigne, quantiteGpl35ConsigneRecharge,
-          montantGpl,
-          modePaiement,
-        },
-      }),
-      ...(lubricantSalesData !== null
-        ? [
-            this.prisma.versementLubrifiantSale.deleteMany({ where: { versementId } }),
-            this.prisma.versementProduit.update({ where: { id: versementId }, data: { lubricantSales: { create: lubricantSalesData } } }),
-          ]
-        : []),
-    ]);
+    await this.prisma.versementProduit.update({
+      where: { id: versementId },
+      data: {
+        quantiteGpl125Pleine, quantiteGpl125Consigne, quantiteGpl125ConsigneRecharge,
+        quantiteGpl35Pleine, quantiteGpl35Consigne, quantiteGpl35ConsigneRecharge,
+        montantGpl,
+        modePaiement,
+      },
+    });
 
     const detailParts = [
       montantGpl !== ancienMontantGpl && `Gaz ${fcfa(ancienMontantGpl)} → ${fcfa(montantGpl)}`,
       modePaiement !== ancienModePaiement && `Mode de paiement Gaz ${ancienModePaiement === "TPE" ? "TPE" : "Cash"} → ${modePaiement === "TPE" ? "TPE" : "Cash"}`,
-      nouveauMontantLub !== ancienMontantLub && `Lubrifiants ${fcfa(ancienMontantLub)} → ${fcfa(nouveauMontantLub)}`,
     ].filter(Boolean);
     await this.auditService.record({
       categorie: "ENCAISSEMENT",
@@ -574,11 +510,11 @@ export class CashEntriesService {
     return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
   }
 
-  /** Supprime un versement (Gaz et/ou Lubrifiants) saisi par erreur. */
+  /** Supprime un versement Gaz saisi par erreur. */
   async supprimerVersement(cashEntryId: string, versementId: string, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
       where: { id: cashEntryId },
-      include: { versements: { include: { attendant: true, lubricantSales: true } } },
+      include: { versements: { include: { attendant: true } } },
     });
     if (!entry) throw new NotFoundException("Quart introuvable.");
     if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
@@ -594,13 +530,9 @@ export class CashEntriesService {
     const detailParts = [
       Number(versement.montantTpe) > 0 && `TPE ${fcfa(Number(versement.montantTpe))}`,
       Number(versement.montantGpl) > 0 && `Gaz ${fcfa(Number(versement.montantGpl))}`,
-      versement.lubricantSales.length > 0 && `Lubrifiants ${fcfa(versement.lubricantSales.reduce((s, ls) => s + Number(ls.montantCalcule), 0))}`,
     ].filter(Boolean);
 
-    await this.prisma.$transaction([
-      this.prisma.versementLubrifiantSale.deleteMany({ where: { versementId } }),
-      this.prisma.versementProduit.delete({ where: { id: versementId } }),
-    ]);
+    await this.prisma.versementProduit.delete({ where: { id: versementId } });
 
     await this.auditService.record({
       categorie: "ENCAISSEMENT",
@@ -665,7 +597,6 @@ export class CashEntriesService {
       (e) =>
         e.responsableQuartId === dto.nouvelAttendantId ||
         e.responsableGplId === dto.nouvelAttendantId ||
-        e.responsableLubrifiantsId === dto.nouvelAttendantId ||
         e.pumpReadings.some((r) => r.attendantId === dto.nouvelAttendantId),
     );
     if (dejaAffecteAilleurs) {
@@ -694,16 +625,16 @@ export class CashEntriesService {
 
   /**
    * Clôture un quart EN_COURS : relevés réels de fermeture par pompe. Le cash
-   * physique, le TPE, le Gaz et les Lubrifiants sont entièrement dérivés des
-   * versements progressifs déjà enregistrés pendant le quart (remises +
-   * VersementProduit) — il n'y a plus rien d'autre à saisir ici que les index.
+   * physique, le TPE et le Gaz sont entièrement dérivés des versements
+   * progressifs déjà enregistrés pendant le quart (remises + VersementProduit)
+   * — il n'y a plus rien d'autre à saisir ici que les index.
    */
   async cloturer(cashEntryId: string, dto: CloturerCashEntryDto, actor: JwtPayload) {
     const entry = await this.prisma.cashEntry.findUnique({
       where: { id: cashEntryId },
       include: {
         pumpReadings: { include: { pump: true, remises: true } },
-        versements: { include: { lubricantSales: true } },
+        versements: true,
       },
     });
     if (!entry) throw new NotFoundException("Quart introuvable.");
@@ -738,7 +669,6 @@ export class CashEntriesService {
     // billetage manuel obligatoire) + les ventes Gaz payées cash. TPE = somme du TPE propre à
     // chaque pompe (RemiseCaisse) + les éventuels versements TPE historiques (VersementProduit,
     // saisis avant que le TPE ne devienne propre à chaque pompe) + les ventes Gaz payées TPE.
-    // Lubrifiants = somme des versements progressifs.
     const montantGplCash = entry.versements.reduce((s, v) => s + (v.modePaiement === "CASH" ? Number(v.montantGpl) : 0), 0);
     const montantGplTpe = entry.versements.reduce((s, v) => s + (v.modePaiement === "TPE" ? Number(v.montantGpl) : 0), 0);
     const montant = entry.pumpReadings.reduce((s, r) => s + r.remises.reduce((s2, rm) => s2 + Number(rm.montant), 0), 0) + montantGplCash;
@@ -754,20 +684,6 @@ export class CashEntriesService {
     const quantiteGpl35Consigne = entry.versements.reduce((s, v) => s + v.quantiteGpl35Consigne, 0);
     const quantiteGpl35ConsigneRecharge = entry.versements.reduce((s, v) => s + v.quantiteGpl35ConsigneRecharge, 0);
 
-    const lubMap = new Map<string, { quantite: number; montant: number }>();
-    for (const v of entry.versements) {
-      for (const ls of v.lubricantSales) {
-        const cur = lubMap.get(ls.lubricantFormatId) ?? { quantite: 0, montant: 0 };
-        cur.quantite += ls.quantite;
-        cur.montant += Number(ls.montantCalcule);
-        lubMap.set(ls.lubricantFormatId, cur);
-      }
-    }
-    const lubricantSalesData = [...lubMap.entries()].map(([lubricantFormatId, v]) => ({
-      lubricantFormatId, quantite: v.quantite, montantCalcule: v.montant,
-    }));
-    const montantLubrifiants = lubricantSalesData.reduce((s, v) => s + v.montantCalcule, 0);
-
     // Comptage de vérification optionnel : n'alimente plus le cash physique officiel, sert
     // uniquement à signaler un écart de comptage à surveiller.
     const denominations = dto.denominations ?? [];
@@ -775,13 +691,12 @@ export class CashEntriesService {
     const totalPieces = denominations.filter((d) => d.type === "PIECE").reduce((s, d) => s + d.valeurFaciale * d.quantite, 0);
     const ecartComptage = denominations.length > 0 ? totalBillets + totalPieces - montant : null;
 
-    // Cash Global = tout ce qui a été reçu (cash + TPE carburant, et Lubrifiants — également
-    // vendus et encaissés, mais sans compteur physique à vérifier ; le Gaz est déjà compté dans
+    // Cash Global = tout ce qui a été reçu (cash + TPE carburant ; le Gaz est déjà compté dans
     // montant/montantTpe selon son mode de paiement). Comparé au Total théorique
-    // (Carburant+Gaz+Lubrifiants), Gaz et Lubrifiants s'annulent des deux côtés : l'écart se
-    // recentre ainsi sur le seul écart carburant (cash/TPE remis vs. index de pompe réel).
-    const montantGlobal = montant + montantTpe + montantLubrifiants;
-    const ecart = montantGlobal - (montantCarburant + montantGpl + montantLubrifiants);
+    // (Carburant+Gaz), le Gaz s'annule des deux côtés : l'écart se recentre ainsi sur le seul
+    // écart carburant (cash/TPE remis vs. index de pompe réel).
+    const montantGlobal = montant + montantTpe;
+    const ecart = montantGlobal - (montantCarburant + montantGpl);
 
     await this.prisma.$transaction([
       ...pumpReadingsMaj.map((p) =>
@@ -807,7 +722,6 @@ export class CashEntriesService {
           quantiteGpl35ConsigneRecharge,
           montantGpl,
           montantCarburant,
-          montantLubrifiants,
           ecart,
           denominations: {
             create: denominations.filter((d) => d.quantite > 0).map((d) => ({
@@ -817,7 +731,6 @@ export class CashEntriesService {
               sousTotal: d.valeurFaciale * d.quantite,
             })),
           },
-          lubricantSales: { create: lubricantSalesData },
         },
       }),
     ]);
@@ -826,8 +739,8 @@ export class CashEntriesService {
       categorie: "ENCAISSEMENT",
       action: "Quart clôturé",
       detail:
-        `Quart ${entry.quart} — Cash physique ${fcfa(montant)} (dont Gaz cash ${fcfa(montantGplCash)}) + TPE ${fcfa(montantTpe)} (dont Gaz TPE ${fcfa(montantGplTpe)}) + Lubrifiants ${fcfa(montantLubrifiants)} = Global ${fcfa(montantGlobal)} — ` +
-        `Carburant+Gaz+Lubrifiants calculé ${fcfa(montantCarburant + montantGpl + montantLubrifiants)} — Écart ${fcfa(ecart)}` +
+        `Quart ${entry.quart} — Cash physique ${fcfa(montant)} (dont Gaz cash ${fcfa(montantGplCash)}) + TPE ${fcfa(montantTpe)} (dont Gaz TPE ${fcfa(montantGplTpe)}) = Global ${fcfa(montantGlobal)} — ` +
+        `Carburant+Gaz calculé ${fcfa(montantCarburant + montantGpl)} — Écart ${fcfa(ecart)}` +
         (ecartComptage !== null && Math.abs(ecartComptage) > 0.01
           ? ` — ⚠ Comptage de vérification différent des remises de ${fcfa(ecartComptage)}`
           : ""),

@@ -10,8 +10,8 @@ class PumpReadingInputDto {
 
 /**
  * Démarre un quart : ne connaît que les responsables et l'index d'ouverture de
- * chaque pompe. Le reste (billetage, TPE, GPL, lubrifiants, index de fermeture)
- * n'est saisi qu'à la clôture — voir CloturerCashEntryDto.
+ * chaque pompe. Le reste (billetage, TPE, GPL, index de fermeture) n'est
+ * saisi qu'à la clôture — voir CloturerCashEntryDto.
  */
 export class CreateCashEntryDto {
   @IsString() stationId!: string;
@@ -20,7 +20,6 @@ export class CreateCashEntryDto {
 
   @IsString() responsableQuartId!: string;
   @IsString() responsableGplId!: string;
-  @IsString() responsableLubrifiantsId!: string;
 
   @IsArray()
   @ArrayMinSize(1)

@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { ArrayMinSize, IsArray, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from "class-validator";
+import { IsArray, IsEnum, IsInt, IsNumber, IsOptional, IsString, Min, ValidateNested } from "class-validator";
 import { ModePaiement } from "@prisma/client";
 
 class RemiseInputDto {
@@ -10,17 +10,11 @@ class RemiseInputDto {
   @IsOptional() @IsNumber() @Min(0) montantTpe?: number;
 }
 
-class LubricantSaleInputDto {
-  @IsString() lubricantFormatId!: string;
-  @IsInt() @Min(1) quantite!: number;
-}
-
 /**
  * Versement progressif d'un pompiste en cours de quart : cash remis pompe par
  * pompe, chaque pompe portant aussi son propre montant TPE (ex. TPE-(S1-A)),
- * et, pour le/la responsable Gaz/Lubrifiants du quart, les bouteilles ou
- * bidons vendus depuis le dernier versement. Au moins un champ doit être
- * renseigné.
+ * et, pour le/la responsable Gaz du quart, les bouteilles vendues depuis le
+ * dernier versement. Au moins un champ doit être renseigné.
  */
 export class VersementProduitDto {
   @IsString() attendantId!: string;
@@ -40,10 +34,4 @@ export class VersementProduitDto {
   // Mode de paiement de la vente Gaz (CASH par défaut) — une vente TPE-Gaz est possible.
   // Sans effet si aucune quantité de Gaz n'est renseignée.
   @IsOptional() @IsEnum(ModePaiement) modePaiementGpl?: ModePaiement;
-
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => LubricantSaleInputDto)
-  lubricantSales?: LubricantSaleInputDto[];
 }
