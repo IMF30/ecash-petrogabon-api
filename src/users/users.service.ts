@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import * as argon2 from "argon2";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -81,6 +81,23 @@ export class UsersService {
 
   async update(id: string, dto: UpdateUserDto, actor: JwtPayload) {
     const before = await this.findOne(id);
+
+    // Le système doit toujours conserver au moins un compte Administrateur actif — sans ce
+    // garde-fou, un Administrateur pourrait se désactiver ou se rétrograder lui-même (ou un
+    // autre Admin) par erreur et priver le système de tout accès administrateur, sans recours.
+    const resteraAdministrateurActif =
+      (dto.statut ?? before.statut) === "ACTIF" && (dto.role ?? before.role) === "ADMINISTRATEUR";
+    if (before.role === "ADMINISTRATEUR" && before.statut === "ACTIF" && !resteraAdministrateurActif) {
+      const autresAdminsActifs = await this.prisma.user.count({
+        where: { role: "ADMINISTRATEUR", statut: "ACTIF", id: { not: id } },
+      });
+      if (autresAdminsActifs === 0) {
+        throw new BadRequestException(
+          "Impossible de désactiver ou de changer le rôle de ce compte : c'est le dernier compte Administrateur actif du système.",
+        );
+      }
+    }
+
     const { password, ...rest } = dto;
     const data: Record<string, unknown> = { ...rest };
     if (password) {
