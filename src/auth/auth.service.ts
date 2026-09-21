@@ -1,10 +1,13 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
 import { createHash, randomBytes } from "crypto";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { describeChanges } from "../common/describe-changes";
 import { JwtPayload } from "./types";
+import { UpdateProfileDto } from "./dto/update-profile.dto";
 
 // Le refresh token brut n'est jamais stocké en base : seul son empreinte SHA-256
 // l'est, afin qu'une fuite de la base ne permette pas de réutiliser les jetons.
@@ -241,5 +244,49 @@ export class AuthService {
       acteurLabel: user.role,
       stationId: user.stationId,
     });
+  }
+
+  /**
+   * Auto-modification du profil (prénom/nom/téléphone/email) par l'utilisateur
+   * lui-même — distinct de UsersService.update, réservé aux Administrateurs, qui
+   * porte en plus le rôle/la station/le statut du compte.
+   */
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const before = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!before) throw new UnauthorizedException("Utilisateur introuvable.");
+
+    let updated;
+    try {
+      updated = await this.prisma.user.update({
+        where: { id: userId },
+        data: { prenom: dto.prenom, nom: dto.nom, email: dto.email, telephone: dto.telephone },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        throw new ConflictException("Cet email est déjà utilisé par un autre compte.");
+      }
+      throw e;
+    }
+
+    await this.auditService.record({
+      categorie: "UTILISATEUR",
+      action: "Profil modifié",
+      detail: describeChanges(before, dto),
+      acteurUserId: updated.id,
+      acteurLabel: updated.role,
+      stationId: updated.stationId,
+    });
+
+    return {
+      id: updated.id,
+      prenom: updated.prenom,
+      nom: updated.nom,
+      identifiant: updated.identifiant,
+      email: updated.email,
+      telephone: updated.telephone,
+      role: updated.role,
+      stationId: updated.stationId,
+      mustChangePassword: updated.mustChangePassword,
+    };
   }
 }

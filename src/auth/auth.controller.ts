@@ -3,6 +3,7 @@ import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { ChangePasswordDto } from "./dto/change-password.dto";
+import { UpdateProfileDto } from "./dto/update-profile.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { CurrentUser } from "./decorators/current-user.decorator";
 import { AllowPasswordChangePending } from "./decorators/allow-password-change-pending.decorator";
@@ -53,6 +54,13 @@ export class AuthController {
     await this.authService.changePassword(user.sub, dto.currentPassword, dto.newPassword);
   }
 
+  @Patch("profile")
+  @UseGuards(JwtAuthGuard)
+  @AllowPasswordChangePending()
+  async updateProfile(@Body() dto: UpdateProfileDto, @CurrentUser() user: JwtPayload) {
+    return this.authService.updateProfile(user.sub, dto);
+  }
+
   @Get("me")
   @UseGuards(JwtAuthGuard)
   @AllowPasswordChangePending()
@@ -65,6 +73,7 @@ export class AuthController {
       nom: record.nom,
       identifiant: record.identifiant,
       email: record.email,
+      telephone: record.telephone,
       role: record.role,
       stationId: record.stationId,
       mustChangePassword: record.mustChangePassword,
