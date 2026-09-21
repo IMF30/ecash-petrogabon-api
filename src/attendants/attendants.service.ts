@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { describeChanges } from "../common/describe-changes";
@@ -81,6 +81,21 @@ export class AttendantsService {
 
   async remove(id: string, actor: JwtPayload) {
     const attendant = await this.findOne(id, actor);
+
+    // Sans ce contrôle, une contrainte de clé étrangère en base ferait échouer la suppression
+    // avec une erreur 500 générique dès que ce pompiste a déjà un relevé ou un versement.
+    const [pumpReadings, versements, responsableQuart, responsableGpl] = await Promise.all([
+      this.prisma.pumpReading.count({ where: { attendantId: id } }),
+      this.prisma.versementProduit.count({ where: { attendantId: id } }),
+      this.prisma.cashEntry.count({ where: { responsableQuartId: id } }),
+      this.prisma.cashEntry.count({ where: { responsableGplId: id } }),
+    ]);
+    if (pumpReadings + versements + responsableQuart + responsableGpl > 0) {
+      throw new BadRequestException(
+        "Ce pompiste a déjà des relevés ou des versements enregistrés — désactivez-le plutôt (statut Inactif) pour ne pas perdre l'historique.",
+      );
+    }
+
     await this.prisma.attendant.delete({ where: { id } });
     await this.auditService.record({
       categorie: "POMPISTE",

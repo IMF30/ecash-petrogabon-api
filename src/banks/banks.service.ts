@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { describeChanges } from "../common/describe-changes";
@@ -24,7 +25,20 @@ export class BanksService {
   }
 
   async create(dto: CreateBankDto, actor: JwtPayload) {
-    const created = await this.prisma.bank.create({ data: dto });
+    let created;
+    try {
+      created = await this.prisma.bank.create({ data: dto });
+    } catch (e) {
+      // Le code interne est dérivé du nom côté frontend (tronqué à 12 caractères) : deux noms
+      // proches peuvent produire le même code et déclencher la contrainte unique en base —
+      // on traduit ça en erreur métier claire plutôt qu'en 500.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        throw new ConflictException(
+          `Le code "${dto.code}" est déjà utilisé par une autre banque — renommez légèrement cette banque (ex. en précisant la ville ou l'agence) pour obtenir un code différent.`,
+        );
+      }
+      throw e;
+    }
     await this.auditService.record({
       categorie: "BANQUE",
       action: "Banque ajoutée",
@@ -52,6 +66,16 @@ export class BanksService {
 
   async remove(id: string, actor: JwtPayload) {
     const bank = await this.findOne(id);
+
+    // Sans ce contrôle, une contrainte de clé étrangère en base ferait échouer la suppression
+    // avec une erreur 500 générique dès que cette banque a déjà reçu un versement.
+    const deposits = await this.prisma.deposit.count({ where: { bankId: id } });
+    if (deposits > 0) {
+      throw new BadRequestException(
+        "Cette banque a déjà des versements enregistrés — désactivez-la plutôt (statut Inactif) pour ne pas perdre l'historique.",
+      );
+    }
+
     await this.prisma.bank.delete({ where: { id } });
     await this.auditService.record({
       categorie: "BANQUE",

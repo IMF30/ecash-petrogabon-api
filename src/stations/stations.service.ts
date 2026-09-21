@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Produit } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -117,6 +117,25 @@ export class StationsService {
 
   async remove(id: string, actor: JwtPayload) {
     const station = await this.findOne(id);
+
+    // Une station reçoit son parc de pompes dès sa création (voir create() ci-dessus) : la
+    // suppression n'est donc réaliste que pour une station fraîchement créée et jamais utilisée.
+    // Sans ce contrôle explicite, la contrainte de clé étrangère en base ferait échouer la
+    // suppression avec une erreur 500 générique dès qu'une donnée est rattachée.
+    const [users, attendants, pumps, distributeurs, cashEntries, deposits] = await Promise.all([
+      this.prisma.user.count({ where: { stationId: id } }),
+      this.prisma.attendant.count({ where: { stationId: id } }),
+      this.prisma.pump.count({ where: { stationId: id } }),
+      this.prisma.distributeur.count({ where: { stationId: id } }),
+      this.prisma.cashEntry.count({ where: { stationId: id } }),
+      this.prisma.deposit.count({ where: { stationId: id } }),
+    ]);
+    if (users + attendants + pumps + distributeurs + cashEntries + deposits > 0) {
+      throw new BadRequestException(
+        "Cette station a des données associées (utilisateurs, personnel, pompes, encaissements ou versements) et ne peut pas être supprimée — désactivez-la plutôt (statut Hors Service).",
+      );
+    }
+
     await this.prisma.station.delete({ where: { id } });
     await this.auditService.record({
       categorie: "STATION",
