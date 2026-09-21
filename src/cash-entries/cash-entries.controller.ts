@@ -75,4 +75,11 @@ export class CashEntriesController {
   cloturer(@Param("id") id: string, @Body() dto: CloturerCashEntryDto, @CurrentUser() user: JwtPayload) {
     return this.cashEntriesService.cloturer(id, dto, user);
   }
+
+  /** Annule un quart ouvert par erreur, tant qu'aucune remise ni vente n'y a été saisie. */
+  @Delete(":id")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  annuler(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.annuler(id, user);
+  }
 }

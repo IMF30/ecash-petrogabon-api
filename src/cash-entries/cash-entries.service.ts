@@ -751,4 +751,49 @@ export class CashEntriesService {
 
     return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
   }
+
+  /**
+   * Annule un quart ouvert par erreur (mauvaise date, mauvais type de quart...) avant toute
+   * saisie réelle. Contrairement à la clôture, c'est une vraie suppression — mais strictement
+   * limitée à un quart EN_COURS n'ayant reçu aucune remise ni aucune vente : impossible
+   * d'effacer la moindre donnée financière réelle par ce biais. Une station ne pouvant avoir
+   * qu'un seul quart EN_COURS à la fois, c'est le seul moyen de débloquer l'ouverture du bon
+   * quart après une erreur de saisie à l'ouverture (cf. cahier §17 : aucune suppression
+   * autorisée — ceci n'en est pas une puisqu'aucune donnée financière n'existe encore).
+   */
+  async annuler(cashEntryId: string, actor: JwtPayload) {
+    const entry = await this.prisma.cashEntry.findUnique({
+      where: { id: cashEntryId },
+      include: { pumpReadings: { include: { remises: true } }, versements: true },
+    });
+    if (!entry) throw new NotFoundException("Quart introuvable.");
+    if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
+      throw new ForbiddenException("Vous ne pouvez annuler un quart que pour votre propre station.");
+    }
+    if (entry.statut !== "EN_COURS") {
+      throw new BadRequestException("Ce quart est déjà clôturé et ne peut plus être annulé.");
+    }
+    const aDejaDesDonnees = entry.pumpReadings.some((r) => r.remises.length > 0) || entry.versements.length > 0;
+    if (aDejaDesDonnees) {
+      throw new BadRequestException(
+        "Ce quart a déjà des remises ou des ventes enregistrées et ne peut plus être annulé — clôturez-le normalement pour ne pas perdre ces données.",
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.pumpReading.deleteMany({ where: { cashEntryId } }),
+      this.prisma.cashEntry.delete({ where: { id: cashEntryId } }),
+    ]);
+
+    await this.auditService.record({
+      categorie: "ENCAISSEMENT",
+      action: "Quart annulé (ouvert par erreur)",
+      detail: `Quart ${QUART_LABEL[entry.quart]} du ${entry.date.toLocaleDateString("fr-FR")} — annulé avant toute saisie, aucune donnée financière perdue.`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: entry.stationId,
+    });
+
+    return { id: cashEntryId };
+  }
 }
