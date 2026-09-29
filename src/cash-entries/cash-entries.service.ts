@@ -131,18 +131,6 @@ export class CashEntriesService {
       throw new BadRequestException("Un ou plusieurs pompistes sont inactifs et ne peuvent plus être affectés à un quart.");
     }
 
-    // Règle métier : un pompiste n'est affecté qu'à un seul quart dans la journée (son quart
-    // assigné sur sa fiche) — il ne peut pas être sélectionné pour un autre quart. La gérante
-    // doit d'abord changer son quart assigné depuis sa fiche si elle veut le faire travailler
-    // sur un autre quart.
-    const horsQuartAssigne = attendants.filter((a) => a.quart !== dto.quart);
-    if (horsQuartAssigne.length > 0) {
-      const noms = horsQuartAssigne.map((a) => `${a.prenom} ${a.nom} (assigné(e) au quart ${QUART_LABEL[a.quart]})`).join(", ");
-      throw new BadRequestException(
-        `Un pompiste ne peut être sélectionné que pour son quart assigné : ${noms}. Modifiez son quart depuis sa fiche avant d'ouvrir ce quart.`,
-      );
-    }
-
     // Règle métier : un pompiste ne peut être affecté qu'à un seul quart par jour, tous rôles confondus
     // (responsable de quart, GPL ou pompiste). On récupère donc tous les encaissements du même jour
     // sur les AUTRES quarts de cette station pour détecter un pompiste déjà affecté ailleurs.

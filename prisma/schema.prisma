@@ -182,7 +182,11 @@ model Attendant {
   prenom    String
   telephone String
   embauche  DateTime
-  quart     Quart
+  // Quart habituel/par défaut, purement informatif : l'affectation réelle à un quart donné se
+  // fait à l'ouverture de ce quart (CashEntry/PumpReading) et n'est plus contrainte à cette
+  // valeur — un pompiste peut être créé sans quart puis affecté librement, du moment qu'il n'est
+  // affecté qu'à un seul quart par jour (cf. CashEntriesService.create).
+  quart     Quart?
   statut    StatutPompiste @default(ACTIF)
   stationId String
   station   Station        @relation(fields: [stationId], references: [id])

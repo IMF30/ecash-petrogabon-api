@@ -6,7 +6,7 @@ export class CreateAttendantDto {
   @IsString() prenom!: string;
   @IsString() telephone!: string;
   @IsDateString() embauche!: string;
-  @IsEnum(Quart) quart!: Quart;
+  @IsOptional() @IsEnum(Quart) quart?: Quart;
   @IsString() stationId!: string;
 
   @IsOptional() @IsEnum(StatutPompiste) statut?: StatutPompiste;
