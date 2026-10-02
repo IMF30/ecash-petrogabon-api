@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } f
 import { AttendantsService } from "./attendants.service";
 import { CreateAttendantDto } from "./dto/create-attendant.dto";
 import { UpdateAttendantDto } from "./dto/update-attendant.dto";
+import { SetPinDto } from "./dto/set-pin.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -48,5 +49,17 @@ export class AttendantsController {
   @Roles("ADMINISTRATEUR")
   remove(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
     return this.attendantsService.remove(id, user);
+  }
+
+  @Patch(":id/pin")
+  @Roles("ADMINISTRATEUR", "GERANTE")
+  setPin(@Param("id") id: string, @Body() dto: SetPinDto, @CurrentUser() user: JwtPayload) {
+    return this.attendantsService.setPin(id, dto, user);
+  }
+
+  @Patch(":id/regenerer-pin")
+  @Roles("ADMINISTRATEUR", "GERANTE")
+  regenererPin(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.attendantsService.regenererPin(id, user);
   }
 }

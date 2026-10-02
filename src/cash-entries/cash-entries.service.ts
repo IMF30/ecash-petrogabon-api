@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
-import { Prisma, Produit, PriceConfig } from "@prisma/client";
+import { Prisma, Produit, PriceConfig, Quart } from "@prisma/client";
+import * as argon2 from "argon2";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { PricesService } from "../prices/prices.service";
@@ -9,13 +10,29 @@ import { VersementProduitDto } from "./dto/versement-produit.dto";
 import { ModifierRemiseDto } from "./dto/modifier-remise.dto";
 import { ModifierVersementDto } from "./dto/modifier-versement.dto";
 import { ReassignerPompeDto } from "./dto/reassigner-pompe.dto";
+import { genererCodesPinUniques } from "../attendants/pin-generator";
 import { JwtPayload } from "../auth/types";
+
+/**
+ * Forme minimale d'acteur acceptée par enregistrerVersement : un JwtPayload (Gérante/
+ * Administrateur) la satisfait déjà telle quelle, mais elle admet aussi l'acteur
+ * synthétique construit par PompisteModule (role: "POMPISTE", qui n'existe pas dans
+ * l'enum Prisma Role réservé aux comptes Utilisateur).
+ */
+interface ActeurVersement {
+  sub: string;
+  role: string;
+  stationId: string | null;
+}
 
 function fcfa(n: number): string {
   return new Intl.NumberFormat("fr-FR").format(n) + " FCFA";
 }
 
 const QUART_LABEL: Record<string, string> = { MATIN: "Matin", SOIR: "Soir", NUIT: "Nuit" };
+
+/** Ordre chronologique des quarts au sein d'une même journée (pour comparer deux quarts du même jour). */
+const QUART_ORDER: Record<Quart, number> = { MATIN: 0, SOIR: 1, NUIT: 2 };
 
 /** Prix au litre du carburant (Essence, Gasoil, Pétrole — les "produits blancs" vendus à la pompe). */
 function prixLitreDuProduit(produit: Produit, prixConfig: PriceConfig): number {
@@ -161,26 +178,78 @@ export class CashEntriesService {
       throw new BadRequestException("Une ou plusieurs pompes sont hors service et ne peuvent plus enregistrer de relevé.");
     }
 
+    // Continuité des compteurs : l'index d'ouverture d'une pompe doit reprendre exactement là où
+    // le dernier quart clôturé l'ayant utilisée s'est arrêté — une pompe physique ne "remet pas à
+    // zéro" son compteur entre deux quarts. On cherche sa dernière lecture connue (pas forcément
+    // le quart immédiatement précédent : une pompe n'est pas forcément affectée à chaque quart).
+    const dernieresLectures = await this.prisma.pumpReading.findMany({
+      where: {
+        pumpId: { in: pumpIds },
+        indexFermeture: { not: null },
+        cashEntry: { stationId: dto.stationId, statut: "CLOTURE", date: { lte: date } },
+      },
+      select: { pumpId: true, indexFermeture: true, cashEntry: { select: { date: true, quart: true } } },
+    });
+    const lecturesParPompe = new Map<string, { date: Date; quart: Quart; indexFermeture: number }[]>();
+    for (const l of dernieresLectures) {
+      const liste = lecturesParPompe.get(l.pumpId) ?? [];
+      liste.push({ date: l.cashEntry.date, quart: l.cashEntry.quart, indexFermeture: Number(l.indexFermeture) });
+      lecturesParPompe.set(l.pumpId, liste);
+    }
+    const erreursIndex: string[] = [];
+    for (const r of dto.pumpReadings) {
+      const avant = (lecturesParPompe.get(r.pumpId) ?? [])
+        .filter((l) => l.date.getTime() < date.getTime() || (l.date.getTime() === date.getTime() && QUART_ORDER[l.quart] < QUART_ORDER[dto.quart]))
+        .sort((a, b) => b.date.getTime() - a.date.getTime() || QUART_ORDER[b.quart] - QUART_ORDER[a.quart]);
+      const derniere = avant[0];
+      if (derniere && derniere.indexFermeture !== r.indexOuverture) {
+        const code = pumps.find((p) => p.id === r.pumpId)?.code ?? r.pumpId;
+        erreursIndex.push(`${code} (attendu ${derniere.indexFermeture}, saisi ${r.indexOuverture})`);
+      }
+    }
+    if (erreursIndex.length > 0) {
+      throw new BadRequestException(
+        `L'index d'ouverture doit correspondre à l'index de fermeture du dernier quart clôturé pour chaque pompe : ${erreursIndex.join(", ")}.`,
+      );
+    }
+
+    // Un nouveau PIN est régénéré pour chaque pompiste impliqué à chaque ouverture de quart —
+    // empêche un PIN mémorisé/partagé entre pompistes de rester valable indéfiniment. Hashés avant
+    // la transaction (argon2 est asynchrone, incompatible avec un tableau $transaction) ; générés
+    // seulement maintenant (pas avant les validations ci-dessus) pour ne pas en gaspiller si la
+    // création du quart échoue au final.
+    const codesPin = genererCodesPinUniques(attendantIds.length);
+    const pinHashes = await Promise.all(codesPin.map((pin) => argon2.hash(pin)));
+
     let entry;
     try {
-      entry = await this.prisma.cashEntry.create({
-        data: {
-          stationId: dto.stationId,
-          quart: dto.quart,
-          date,
-          statut: "EN_COURS",
-          responsableQuartId: dto.responsableQuartId,
-          responsableGplId: dto.responsableGplId,
-          pumpReadings: {
-            create: dto.pumpReadings.map((r) => ({
-              attendantId: r.attendantId,
-              pumpId: r.pumpId,
-              indexOuverture: r.indexOuverture,
-            })),
+      const [entryCree] = await this.prisma.$transaction([
+        this.prisma.cashEntry.create({
+          data: {
+            stationId: dto.stationId,
+            quart: dto.quart,
+            date,
+            statut: "EN_COURS",
+            responsableQuartId: dto.responsableQuartId,
+            responsableGplId: dto.responsableGplId,
+            pumpReadings: {
+              create: dto.pumpReadings.map((r) => ({
+                attendantId: r.attendantId,
+                pumpId: r.pumpId,
+                indexOuverture: r.indexOuverture,
+              })),
+            },
           },
-        },
-        include: INCLUDE_COMPLET,
-      });
+          include: INCLUDE_COMPLET,
+        }),
+        ...attendantIds.map((id, i) =>
+          this.prisma.attendant.update({
+            where: { id },
+            data: { pinHash: pinHashes[i], pinFailedAttempts: 0, pinLockedUntil: null },
+          }),
+        ),
+      ]);
+      entry = entryCree;
     } catch (e) {
       // Filet de sécurité contre la course : si deux requêtes passent la vérification findUnique en même
       // temps, seule la première insertion réussit et la seconde déclenche la contrainte unique en base
@@ -191,16 +260,22 @@ export class CashEntriesService {
       throw e;
     }
 
+    const attendantParId = new Map(attendants.map((a) => [a.id, a]));
+    const pinsGeneres = attendantIds.map((id, i) => {
+      const a = attendantParId.get(id)!;
+      return { attendantId: id, prenom: a.prenom, nom: a.nom, pin: codesPin[i] };
+    });
+
     await this.auditService.record({
       categorie: "ENCAISSEMENT",
       action: "Quart ouvert",
-      detail: `Quart ${dto.quart} ouvert avec ${dto.pumpReadings.length} pompe(s) — en attente de clôture.`,
+      detail: `Quart ${dto.quart} ouvert avec ${dto.pumpReadings.length} pompe(s) — en attente de clôture. Nouveaux PIN générés pour ${attendantIds.length} pompiste(s).`,
       acteurUserId: actor.sub,
       acteurLabel: actor.role,
       stationId: dto.stationId,
     });
 
-    return entry;
+    return { ...entry, pinsGeneres };
   }
 
   /**
@@ -213,13 +288,16 @@ export class CashEntriesService {
    * la Trésorerie et au Contrôle Interne de voir le cash physique et les ventes se
    * constituer en temps réel.
    */
-  async enregistrerVersement(cashEntryId: string, dto: VersementProduitDto, actor: JwtPayload) {
+  async enregistrerVersement(cashEntryId: string, dto: VersementProduitDto, actor: ActeurVersement, acteurLabelOverride?: string) {
     const entry = await this.prisma.cashEntry.findUnique({
       where: { id: cashEntryId },
-      include: { pumpReadings: { include: { pump: true, attendant: true } } },
+      include: { pumpReadings: { include: { pump: true, attendant: true } }, station: true },
     });
     if (!entry) throw new NotFoundException("Quart introuvable.");
-    if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
+    // Généralisé (au lieu de "actor.role === 'GERANTE'") : tout acteur rattaché à une
+    // station précise — Gérante ou, désormais, un pompiste via l'espace dédié — ne peut
+    // agir que sur sa propre station. Administrateur/Trésorerie ont stationId === null.
+    if (actor.stationId && actor.stationId !== entry.stationId) {
       throw new ForbiddenException("Vous ne pouvez saisir un versement que pour votre propre station.");
     }
     if (entry.statut !== "EN_COURS") {
@@ -237,6 +315,15 @@ export class CashEntriesService {
       ?? (await this.prisma.attendant.findUnique({ where: { id: dto.attendantId } }))!;
 
     const remisesDto = (dto.remises ?? []).filter((r) => r.montant > 0 || (r.montantTpe ?? 0) > 0);
+    // Une remise ne peut être attribuée qu'au pompiste réellement affecté à cette pompe sur
+    // ce quart — empêche de créditer (par erreur ou volontairement) la pompe d'un autre.
+    const remisePompeEtrangere = remisesDto.find((r) => {
+      const pumpReading = entry.pumpReadings.find((pr) => pr.id === r.pumpReadingId);
+      return pumpReading && pumpReading.attendantId !== dto.attendantId;
+    });
+    if (remisePompeEtrangere) {
+      throw new ForbiddenException("Une remise ne peut être saisie que pour une pompe affectée à ce pompiste sur ce quart.");
+    }
     const qteGpl125Pleine = dto.quantiteGpl125Pleine ?? 0;
     const qteGpl125Consigne = dto.quantiteGpl125Consigne ?? 0;
     const qteGpl125ConsigneRecharge = dto.quantiteGpl125ConsigneRecharge ?? 0;
@@ -244,6 +331,10 @@ export class CashEntriesService {
     const qteGpl35Consigne = dto.quantiteGpl35Consigne ?? 0;
     const qteGpl35ConsigneRecharge = dto.quantiteGpl35ConsigneRecharge ?? 0;
     const aUneVenteGpl = qteGpl125Pleine + qteGpl125Consigne + qteGpl125ConsigneRecharge + qteGpl35Pleine + qteGpl35Consigne + qteGpl35ConsigneRecharge > 0;
+    // Seul le/la responsable Gaz désigné(e) à l'ouverture du quart peut déclarer une vente Gaz.
+    if (aUneVenteGpl && dto.attendantId !== entry.responsableGplId) {
+      throw new ForbiddenException("Seul le/la responsable désigné(e) des ventes Gaz peut déclarer une vente Gaz sur ce quart.");
+    }
     // Une vente Gaz est presque toujours payée cash, mais une vente TPE-Gaz est possible.
     const modePaiementGpl = dto.modePaiementGpl ?? "CASH";
 
@@ -265,6 +356,7 @@ export class CashEntriesService {
       return {
         pumpReadingId: pumpReading.id,
         pumpCode: pumpReading.pump.code,
+        produit: pumpReading.pump.produit,
         montant: r.montant,
         montantTpe,
         litres,
@@ -311,6 +403,7 @@ export class CashEntriesService {
     // Le dernier élément est toujours le findUnique final, quel que soit le nombre de remises/le
     // versement optionnel qui le précèdent dans le tableau.
     const entryMaj = resultatsTransaction[resultatsTransaction.length - 1];
+    if (!entryMaj) throw new NotFoundException("Quart introuvable après enregistrement du versement.");
 
     const detailParts = [
       remisesAEnregistrer.length > 0 && `Cash : ${remisesAEnregistrer.map((r) => `${r.pumpCode} ${fcfa(r.montant)}`).join(", ")}`,
@@ -322,11 +415,41 @@ export class CashEntriesService {
       action: "Versement en cours de quart enregistré",
       detail: `${attendant.prenom} ${attendant.nom} — ${detailParts.join(" — ")}`,
       acteurUserId: actor.sub,
-      acteurLabel: actor.role,
+      acteurLabel: acteurLabelOverride ?? actor.role,
       stationId: entry.stationId,
     });
 
-    return entryMaj;
+    // Récapitulatif du versement qui vient d'être enregistré (par opposition à entryMaj,
+    // qui reflète l'état complet du quart) — sert à imprimer un ticket côté pompiste sans
+    // avoir à recalculer ces montants/litres une seconde fois côté appelant.
+    const dernierVersement = {
+      horodatage: new Date().toISOString(),
+      quart: entry.quart,
+      date: entry.date,
+      station: { nom: entry.station.nom, ville: entry.station.ville, adresse: entry.station.adresse },
+      pompiste: { nom: attendant.nom, prenom: attendant.prenom },
+      lignes: remisesAEnregistrer.map((r) => ({
+        pumpCode: r.pumpCode,
+        produit: r.produit,
+        montant: r.montant,
+        montantTpe: r.montantTpe,
+        litres: r.litres,
+      })),
+      gaz: aUneVenteGpl
+        ? {
+            quantiteGpl125Pleine: qteGpl125Pleine,
+            quantiteGpl125Consigne: qteGpl125Consigne,
+            quantiteGpl125ConsigneRecharge: qteGpl125ConsigneRecharge,
+            quantiteGpl35Pleine: qteGpl35Pleine,
+            quantiteGpl35Consigne: qteGpl35Consigne,
+            quantiteGpl35ConsigneRecharge: qteGpl35ConsigneRecharge,
+            montant: montantGpl,
+            modePaiement: modePaiementGpl,
+          }
+        : null,
+    };
+
+    return { ...entryMaj, dernierVersement };
   }
 
   /** Corrige le montant cash et/ou TPE d'une remise déjà enregistrée (erreur de saisie) et recalcule l'index courant de la pompe concernée. */

@@ -9,5 +9,6 @@ import { PricesModule } from "../prices/prices.module";
   imports: [JwtModule.register({}), AuditModule, PricesModule],
   controllers: [CashEntriesController],
   providers: [CashEntriesService],
+  exports: [CashEntriesService],
 })
 export class CashEntriesModule {}

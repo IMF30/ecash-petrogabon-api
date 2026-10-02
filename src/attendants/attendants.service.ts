@@ -1,9 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import * as argon2 from "argon2";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { describeChanges } from "../common/describe-changes";
 import { CreateAttendantDto } from "./dto/create-attendant.dto";
 import { UpdateAttendantDto } from "./dto/update-attendant.dto";
+import { SetPinDto } from "./dto/set-pin.dto";
+import { genererCodesPinUniques } from "./pin-generator";
 import { JwtPayload } from "../auth/types";
 
 @Injectable()
@@ -106,6 +109,55 @@ export class AttendantsService {
       stationId: attendant.stationId,
     });
     return { id };
+  }
+
+  /**
+   * Définit ou réinitialise le code PIN d'accès à l'espace pompiste (auto-déclaration
+   * des remises/ventes Gaz, cf. PompisteAuthModule). Réservé à l'Administrateur et à la
+   * Gérante de la station concernée — même portée que les autres actions de gestion du
+   * personnel.
+   */
+  async setPin(id: string, dto: SetPinDto, actor: JwtPayload) {
+    const attendant = await this.findOne(id, actor);
+    const pinHash = await argon2.hash(dto.pin);
+    await this.prisma.attendant.update({
+      where: { id },
+      data: { pinHash, pinFailedAttempts: 0, pinLockedUntil: null },
+    });
+    await this.auditService.record({
+      categorie: "POMPISTE",
+      action: "Code PIN pompiste défini",
+      detail: `${attendant.prenom} ${attendant.nom}`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: attendant.stationId,
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Régénère un code PIN à la demande (hors ouverture de quart) — ex. pompiste qui a oublié
+   * son code en cours de service. Contrairement à setPin, le code est généré par le serveur
+   * (jamais choisi par l'appelant) pour garder la même garantie de hasard que la génération
+   * automatique à l'ouverture de quart.
+   */
+  async regenererPin(id: string, actor: JwtPayload) {
+    const attendant = await this.findOne(id, actor);
+    const [pin] = genererCodesPinUniques(1);
+    const pinHash = await argon2.hash(pin);
+    await this.prisma.attendant.update({
+      where: { id },
+      data: { pinHash, pinFailedAttempts: 0, pinLockedUntil: null },
+    });
+    await this.auditService.record({
+      categorie: "POMPISTE",
+      action: "Code PIN pompiste régénéré",
+      detail: `${attendant.prenom} ${attendant.nom}`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: attendant.stationId,
+    });
+    return { pin };
   }
 
   /** Détermine le quart en cours selon l'heure actuelle et les horaires de la station. */

@@ -14,6 +14,8 @@ import { CashEntriesModule } from "./cash-entries/cash-entries.module";
 import { DepositsModule } from "./deposits/deposits.module";
 import { ErrorLogsModule } from "./error-logs/error-logs.module";
 import { CommonModule } from "./common/common.module";
+import { PompisteAuthModule } from "./pompiste-auth/pompiste-auth.module";
+import { PompisteModule } from "./pompiste/pompiste.module";
 
 @Module({
   imports: [
@@ -36,6 +38,8 @@ import { CommonModule } from "./common/common.module";
     DepositsModule,
     ErrorLogsModule,
     CommonModule,
+    PompisteAuthModule,
+    PompisteModule,
   ],
 })
 export class AppModule {}

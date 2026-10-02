@@ -188,6 +188,11 @@ model Attendant {
   // affecté qu'à un seul quart par jour (cf. CashEntriesService.create).
   quart     Quart?
   statut    StatutPompiste @default(ACTIF)
+  // Accès à l'espace pompiste (auto-déclaration des remises/ventes Gaz) : un code PIN
+  // court, distinct du système de comptes Utilisateur — voir PompisteAuthModule.
+  pinHash           String?
+  pinFailedAttempts Int       @default(0)
+  pinLockedUntil    DateTime?
   stationId String
   station   Station        @relation(fields: [stationId], references: [id])
   createdAt DateTime       @default(now())
