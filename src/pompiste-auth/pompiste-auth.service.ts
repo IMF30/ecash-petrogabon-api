@@ -85,6 +85,25 @@ export class PompisteAuthService {
       data: { pinFailedAttempts: 0, pinLockedUntil: null },
     });
 
+    // Le PIN est régénéré à chaque ouverture de quart (voir CashEntriesService.create) — s'il n'y
+    // a plus de quart EN_COURS impliquant ce pompiste, le code encore valide n'a plus lieu d'ouvrir
+    // l'accès : son quart est terminé, rien à y déclarer.
+    const quartImplique = await this.prisma.cashEntry.findFirst({
+      where: {
+        stationId: attendant.stationId,
+        statut: "EN_COURS",
+        OR: [
+          { responsableQuartId: attendant.id },
+          { responsableGplId: attendant.id },
+          { pumpReadings: { some: { attendantId: attendant.id } } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!quartImplique) {
+      throw new UnauthorizedException("Désolé, votre quart est déjà clôturé !");
+    }
+
     const payload: PompisteJwtPayload = { sub: attendant.id, stationId: attendant.stationId, type: "POMPISTE" };
     const accessToken = this.jwtService.sign(payload, {
       secret: process.env.JWT_POMPISTE_SECRET,

@@ -101,6 +101,7 @@ async function main() {
     { prenom: "Marie", nom: "Laurent", identifiant: "mlaurent", email: "marie.laurent@petrogabon.ga", telephone: "+241 02 34 56 78", role: "TRESORERIE" as const, stationId: null },
     { prenom: "Paul", nom: "Koffi", identifiant: "pkoffi", email: "paul.koffi@petrogabon.ga", telephone: "+241 03 45 67 89", role: "CONTROLE_INTERNE" as const, stationId: null },
     { prenom: "Sarah", nom: "Ali", identifiant: "sali", email: "sarah.ali@petrogabon.ga", telephone: "+241 04 56 78 90", role: "ADMINISTRATEUR" as const, stationId: null },
+    { prenom: "Hervé", nom: "Mabiala", identifiant: "hmabiala", email: "herve.mabiala@petrogabon.ga", telephone: "+241 05 67 89 01", role: "RESEAU" as const, stationId: null },
   ];
   for (const u of utilisateurs) {
     await prisma.user.upsert({
