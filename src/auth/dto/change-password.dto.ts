@@ -1,6 +1,7 @@
-import { IsString, MinLength } from "class-validator";
+import { IsString, Matches, MinLength } from "class-validator";
+import { PASSWORD_MIN_LENGTH, PASSWORD_MESSAGE, PASSWORD_REGEX } from "../../common/password-policy";
 
 export class ChangePasswordDto {
   @IsString() currentPassword!: string;
-  @IsString() @MinLength(8) newPassword!: string;
+  @IsString() @MinLength(PASSWORD_MIN_LENGTH) @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE }) newPassword!: string;
 }

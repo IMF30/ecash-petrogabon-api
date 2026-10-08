@@ -31,6 +31,14 @@ function fcfa(n: number): string {
 
 const QUART_LABEL: Record<string, string> = { MATIN: "Matin", SOIR: "Soir", NUIT: "Nuit" };
 
+// Un pompiste ne doit pas garder plus de 100 000 FCFA dans sa "banane" entre deux remises (cf.
+// CashEntry model doc). Le système n'a pas de télémétrie live des pompes : on ne peut donc QUE
+// constater, a posteriori, qu'une remise reçue couvrait plus que ce plafond — pas l'empêcher en
+// amont. Ce constat est journalisé (catégorie POMPISTE) pour le Journal d'Audit ; la gérante le
+// voit aussi, calculé côté front à partir des mêmes remises déjà chargées (voir
+// remisesDepassantLePlafond() dans encaissements-store.ts).
+const PLAFOND_BANANE_FCFA = 100_000;
+
 /** Ordre chronologique des quarts au sein d'une même journée (pour comparer deux quarts du même jour). */
 const QUART_ORDER: Record<Quart, number> = { MATIN: 0, SOIR: 1, NUIT: 2 };
 
@@ -100,6 +108,13 @@ export class CashEntriesService {
     aujourdhui.setUTCHours(0, 0, 0, 0);
     if (date.getTime() > aujourdhui.getTime()) {
       throw new BadRequestException("La date du quart ne peut pas être dans le futur.");
+    }
+    // Garde-fou anti-saisie historique arbitraire (pas une vraie règle métier) — assez large pour
+    // rattraper un oubli de saisie récent, sans permettre de fabriquer un quart à une date ancienne.
+    const septJoursAvant = new Date(aujourdhui);
+    septJoursAvant.setUTCDate(septJoursAvant.getUTCDate() - 7);
+    if (date.getTime() < septJoursAvant.getTime()) {
+      throw new BadRequestException("La date du quart ne peut pas remonter à plus de 7 jours.");
     }
 
     // Règle métier : une station ne peut avoir qu'un seul quart ouvert (EN_COURS) à la fois — la
@@ -351,8 +366,9 @@ export class CashEntriesService {
       const montantTpe = r.montantTpe ?? 0;
       // L'index courant reflète le carburant réellement délivré par cette pompe — donc le cash ET
       // le TPE de cette remise (un client qui paie par carte fait quand même tourner le compteur).
+      // Note : on ne calcule plus ici l'index courant absolu (il dépendrait d'une lecture
+      // potentiellement périmée) — voir l'incrément SQL atomique juste en dessous.
       const litres = (r.montant + montantTpe) / prixLitre;
-      const indexCourant = Number(pumpReading.indexCourant ?? pumpReading.indexOuverture) + litres;
       return {
         pumpReadingId: pumpReading.id,
         pumpCode: pumpReading.pump.code,
@@ -360,7 +376,6 @@ export class CashEntriesService {
         montant: r.montant,
         montantTpe,
         litres,
-        indexCourant,
       };
     });
     const montantTpeTotal = remisesAEnregistrer.reduce((s, r) => s + r.montantTpe, 0);
@@ -378,7 +393,13 @@ export class CashEntriesService {
         this.prisma.remiseCaisse.create({
           data: { pumpReadingId: r.pumpReadingId, montant: r.montant, montantTpe: r.montantTpe, litres: r.litres },
         }),
-        this.prisma.pumpReading.update({ where: { id: r.pumpReadingId }, data: { indexCourant: r.indexCourant } }),
+        // Incrément atomique calculé par Postgres lui-même (COALESCE gère la toute première
+        // remise, où indexCourant vaut encore NULL) — élimine la course entre deux remises
+        // quasi simultanées sur la même pompe qu'un read-then-write en JS ne peut pas éviter.
+        this.prisma.$executeRaw`
+          UPDATE pump_readings SET "indexCourant" = COALESCE("indexCourant", "indexOuverture") + ${r.litres}
+          WHERE id = ${r.pumpReadingId}
+        `,
       ]),
       ...(aUneVenteGpl
         ? [
@@ -402,8 +423,26 @@ export class CashEntriesService {
     ]);
     // Le dernier élément est toujours le findUnique final, quel que soit le nombre de remises/le
     // versement optionnel qui le précèdent dans le tableau.
-    const entryMaj = resultatsTransaction[resultatsTransaction.length - 1];
+    // Le tableau mélange désormais des résultats `$executeRaw` (number, pour les incréments
+    // atomiques d'indexCourant) avec les créations/mises à jour Prisma classiques — seul le tout
+    // dernier élément (le findUnique final) nous intéresse ici, jamais un `number`.
+    const entryMaj = resultatsTransaction[resultatsTransaction.length - 1] as Exclude<(typeof resultatsTransaction)[number], number>;
     if (!entryMaj) throw new NotFoundException("Quart introuvable après enregistrement du versement.");
+
+    // Signalement a posteriori (pas de blocage, voir PLAFOND_BANANE_FCFA ci-dessus) : cette
+    // remise révèle que le pompiste a tenu plus que le plafond autorisé avant de la remettre.
+    for (const r of remisesAEnregistrer) {
+      if (r.montant + r.montantTpe > PLAFOND_BANANE_FCFA) {
+        await this.auditService.record({
+          categorie: "POMPISTE",
+          action: "Anomalie : plafond banane dépassé",
+          detail: `${attendant.prenom} ${attendant.nom} — pompe ${r.pumpCode} — ${fcfa(r.montant + r.montantTpe)} remis en une fois (plafond ${fcfa(PLAFOND_BANANE_FCFA)})`,
+          acteurUserId: actor.sub,
+          acteurLabel: acteurLabelOverride ?? actor.role,
+          stationId: entry.stationId,
+        });
+      }
+    }
 
     const detailParts = [
       remisesAEnregistrer.length > 0 && `Cash : ${remisesAEnregistrer.map((r) => `${r.pumpCode} ${fcfa(r.montant)}`).join(", ")}`,
@@ -477,13 +516,17 @@ export class CashEntriesService {
     const prixLitre = prixLitreDuProduit(pumpReading.pump.produit, prixConfig);
     // Même logique qu'à l'enregistrement : l'index courant reflète le cash ET le TPE de la remise.
     const nouvellesLitres = (dto.montant + montantTpe) / prixLitre;
-    const indexCourant =
-      Number(pumpReading.indexOuverture) +
-      pumpReading.remises.reduce((s, rm) => s + (rm.id === remiseId ? nouvellesLitres : Number(rm.litres)), 0);
+    // Incrément atomique par le DELTA (plutôt qu'un recalcul de la somme totale des remises, qui
+    // resterait lui-même sujet à une course si une autre remise s'ajoute entre la lecture et
+    // l'écriture) — même principe que l'incrément SQL d'enregistrerVersement() ci-dessus.
+    const delta = nouvellesLitres - Number(remise.litres);
 
     await this.prisma.$transaction([
       this.prisma.remiseCaisse.update({ where: { id: remiseId }, data: { montant: dto.montant, montantTpe, litres: nouvellesLitres } }),
-      this.prisma.pumpReading.update({ where: { id: pumpReading.id }, data: { indexCourant } }),
+      this.prisma.$executeRaw`
+        UPDATE pump_readings SET "indexCourant" = COALESCE("indexCourant", "indexOuverture") + ${delta}
+        WHERE id = ${pumpReading.id}
+      `,
     ]);
 
     const detailParts = [
@@ -498,6 +541,19 @@ export class CashEntriesService {
       acteurLabel: actor.role,
       stationId: entry.stationId,
     });
+
+    // Signalement a posteriori (voir PLAFOND_BANANE_FCFA) : la valeur corrigée peut, elle
+    // aussi, révéler un dépassement qui ne serait pas apparu avec le montant d'origine.
+    if (dto.montant + montantTpe > PLAFOND_BANANE_FCFA) {
+      await this.auditService.record({
+        categorie: "POMPISTE",
+        action: "Anomalie : plafond banane dépassé",
+        detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${fcfa(dto.montant + montantTpe)} remis en une fois (plafond ${fcfa(PLAFOND_BANANE_FCFA)})`,
+        acteurUserId: actor.sub,
+        acteurLabel: actor.role,
+        stationId: entry.stationId,
+      });
+    }
 
     return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
   }

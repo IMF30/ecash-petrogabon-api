@@ -1,5 +1,6 @@
-import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from "class-validator";
+import { IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from "class-validator";
 import { Role, StatutCompte } from "@prisma/client";
+import { PASSWORD_MIN_LENGTH, PASSWORD_MESSAGE, PASSWORD_REGEX } from "../../common/password-policy";
 
 export class CreateUserDto {
   @IsString() prenom!: string;
@@ -11,5 +12,5 @@ export class CreateUserDto {
   @IsOptional() @IsString() stationId?: string;
   @IsOptional() @IsEnum(StatutCompte) statut?: StatutCompte;
 
-  @IsString() @MinLength(8) password!: string;
+  @IsString() @MinLength(PASSWORD_MIN_LENGTH) @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE }) password!: string;
 }

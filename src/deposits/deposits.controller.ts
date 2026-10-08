@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { DepositsService } from "./deposits.service";
 import { CreateDepositDto } from "./dto/create-deposit.dto";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -26,5 +26,11 @@ export class DepositsController {
   @Get(":id")
   findOne(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
     return this.depositsService.findDepositById(id, user);
+  }
+
+  @Patch(":id/certifier")
+  @Roles("TRESORERIE")
+  certifier(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.depositsService.certifier(id, user);
   }
 }

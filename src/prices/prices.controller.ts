@@ -22,4 +22,10 @@ export class PricesController {
   update(@Body() dto: UpdatePriceConfigDto, @CurrentUser() user: JwtPayload) {
     return this.pricesService.update(dto, user);
   }
+
+  @Get("historique")
+  @Roles("ADMINISTRATEUR", "CONTROLE_INTERNE")
+  findHistorique() {
+    return this.pricesService.findHistorique();
+  }
 }

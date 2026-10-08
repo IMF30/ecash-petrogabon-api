@@ -20,7 +20,11 @@ export class PompisteAuthController {
   }
 
   @Post("login")
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  // Aligné sur /auth/login (5/min/IP) — le verrouillage par compte (pinFailedAttempts/
+  // pinLockedUntil, voir PompisteAuthService) reste la protection principale contre la force
+  // brute ; ceci resserre juste la protection secondaire par IP, qui était plus permissive ici
+  // sans raison métier.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   login(@Body() dto: PompisteLoginDto) {
     return this.pompisteAuthService.login(dto);
   }

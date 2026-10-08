@@ -16,6 +16,8 @@ import { ErrorLogsModule } from "./error-logs/error-logs.module";
 import { CommonModule } from "./common/common.module";
 import { PompisteAuthModule } from "./pompiste-auth/pompiste-auth.module";
 import { PompisteModule } from "./pompiste/pompiste.module";
+import { StockModule } from "./stock/stock.module";
+import { ApprovisionnementModule } from "./approvisionnement/approvisionnement.module";
 
 @Module({
   imports: [
@@ -40,6 +42,8 @@ import { PompisteModule } from "./pompiste/pompiste.module";
     CommonModule,
     PompisteAuthModule,
     PompisteModule,
+    StockModule,
+    ApprovisionnementModule,
   ],
 })
 export class AppModule {}
