@@ -46,6 +46,13 @@ export class CashEntriesController {
     return this.cashEntriesService.modifierRemise(id, remiseId, dto, user);
   }
 
+  /** Marque comme traitée une alerte "plafond banane dépassé" — n'efface rien, acquitte seulement. */
+  @Patch(":id/remises/:remiseId/traiter-alerte")
+  @Roles("GERANTE", "ADMINISTRATEUR")
+  traiterAlerteRemise(@Param("id") id: string, @Param("remiseId") remiseId: string, @CurrentUser() user: JwtPayload) {
+    return this.cashEntriesService.traiterAlerteRemise(id, remiseId, user);
+  }
+
   @Patch(":id/versements/:versementId")
   @Roles("GERANTE", "ADMINISTRATEUR")
   modifierVersement(@Param("id") id: string, @Param("versementId") versementId: string, @Body() dto: ModifierVersementDto, @CurrentUser() user: JwtPayload) {

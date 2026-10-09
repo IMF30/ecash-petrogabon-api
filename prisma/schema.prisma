@@ -141,6 +141,7 @@ model User {
   commandesLivrees   Commande[] @relation("CommandesLivrees")
   commandesApprouvees Commande[] @relation("CommandesApprouvees")
   prixModifies        PriceHistory[]
+  alertesRemiseTraitees RemiseCaisse[]
 
   @@map("users")
 }
@@ -435,6 +436,14 @@ model RemiseCaisse {
   // avancer PumpReading.indexCourant, pas le seul cash.
   litres        Decimal     @db.Decimal(12, 2)
   createdAt     DateTime    @default(now())
+
+  // Anomalie "plafond banane dépassé" (voir PLAFOND_BANANE_FCFA) traitée a posteriori par la
+  // gérante — passage de "feuille d'alertes" à "traité" (`null` tant qu'ouverte, ou que la
+  // remise ne dépasse pas le plafond). N'efface jamais l'alerte elle-même : seule une marque de
+  // traitement, conservée pour l'audit (qui, quand).
+  alerteTraiteeLe       DateTime?
+  alerteTraiteeParUserId String?
+  alerteTraiteeParUser   User?     @relation(fields: [alerteTraiteeParUserId], references: [id])
 
   @@index([pumpReadingId])
   @@map("remises_caisse")

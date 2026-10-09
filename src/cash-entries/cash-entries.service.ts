@@ -559,6 +559,51 @@ export class CashEntriesService {
   }
 
   /**
+   * Acquitte une alerte "plafond banane dépassé" (voir PLAFOND_BANANE_FCFA) — passage de la
+   * feuille d'alertes de la gérante à "traité". N'efface ni ne modifie la remise elle-même
+   * (montant, TPE, litres, index de pompe inchangés) : seule une marque de traitement est posée,
+   * conservée pour l'audit. Fonctionne même si le quart est déjà CLOTURE (contrairement à
+   * modifierRemise) — traiter une alerte n'est pas une correction financière.
+   */
+  async traiterAlerteRemise(cashEntryId: string, remiseId: string, actor: JwtPayload) {
+    const entry = await this.prisma.cashEntry.findUnique({
+      where: { id: cashEntryId },
+      include: { pumpReadings: { include: { pump: true, attendant: true, remises: true } } },
+    });
+    if (!entry) throw new NotFoundException("Quart introuvable.");
+    if (actor.role === "GERANTE" && actor.stationId !== entry.stationId) {
+      throw new ForbiddenException("Vous ne pouvez traiter une alerte que pour votre propre station.");
+    }
+
+    const pumpReading = entry.pumpReadings.find((r) => r.remises.some((rm) => rm.id === remiseId));
+    if (!pumpReading) throw new NotFoundException("Remise introuvable pour ce quart.");
+    const remise = pumpReading.remises.find((rm) => rm.id === remiseId)!;
+
+    if (Number(remise.montant) + Number(remise.montantTpe) <= PLAFOND_BANANE_FCFA) {
+      throw new BadRequestException("Cette remise ne dépasse pas le plafond — rien à traiter.");
+    }
+    if (remise.alerteTraiteeLe) {
+      throw new BadRequestException("Cette alerte a déjà été traitée.");
+    }
+
+    await this.prisma.remiseCaisse.update({
+      where: { id: remiseId },
+      data: { alerteTraiteeLe: new Date(), alerteTraiteeParUserId: actor.sub },
+    });
+
+    await this.auditService.record({
+      categorie: "POMPISTE",
+      action: "Anomalie remise traitée",
+      detail: `${pumpReading.attendant.prenom} ${pumpReading.attendant.nom} — pompe ${pumpReading.pump.code} — ${fcfa(Number(remise.montant) + Number(remise.montantTpe))}`,
+      acteurUserId: actor.sub,
+      acteurLabel: actor.role,
+      stationId: entry.stationId,
+    });
+
+    return this.prisma.cashEntry.findUnique({ where: { id: cashEntryId }, include: INCLUDE_COMPLET });
+  }
+
+  /**
    * Corrige un versement Gaz déjà enregistré (erreur de saisie ; le TPE se corrige désormais
    * par pompe via modifierRemise). Un champ omis dans le corps de la requête reste inchangé ;
    * le Gaz n'est recalculé que si l'une de ses quantités est fournie.
