@@ -27,6 +27,17 @@ jobs:
         npm run build --if-present
         npm run test --if-present
 
+    # Les migrations (prisma/migrations/*) n'étaient jamais appliquées à la base de
+    # production par ce pipeline — seul `npm install` tournait (postinstall: prisma
+    # generate, qui régénère le client mais ne touche pas le schéma réel en base).
+    # Le code déployé pouvait donc s'attendre à des colonnes/tables absentes de la
+    # vraie base. Nécessite un secret de dépôt `DATABASE_URL` pointant vers la base
+    # Postgres de production (Settings → Secrets and variables → Actions).
+    - name: Appliquer les migrations Prisma à la base de production
+      run: npx prisma migrate deploy
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
     - name: 'Deploy to Azure Web App'
       uses: azure/webapps-deploy@v2
       with: 
