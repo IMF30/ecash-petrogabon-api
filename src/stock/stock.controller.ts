@@ -38,7 +38,7 @@ export class StockController {
   }
 
   @Get("stock/alertes")
-  @Roles("RESEAU", "GRC")
+  @Roles("RESEAU", "GRC", "ADMINISTRATEUR")
   getAlertesReseau() {
     return this.stockService.getAlertesReseau();
   }
