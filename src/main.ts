@@ -6,7 +6,25 @@ import cookieParser = require("cookie-parser");
 import helmet from "helmet";
 import { AppModule } from "./app.module";
 
+/**
+ * Vérifie au démarrage que les secrets obligatoires sont bien configurés, plutôt que de
+ * démarrer "avec succès" et de laisser chaque route qui en a besoin planter silencieusement
+ * au premier appel (exactement ce qui est arrivé avec JWT_POMPISTE_SECRET manquant en prod :
+ * un mauvais PIN rejette proprement avant d'en avoir besoin, mais un PIN correct plante à la
+ * signature du jeton — un échec confus, visible seulement pour certains utilisateurs, sur une
+ * seule route). Un démarrage qui refuse de se lancer est immédiatement visible dans les logs
+ * de déploiement ; une route qui plante une fois sur deux ne l'est pas.
+ */
+function verifierVariablesObligatoires() {
+  const requises = ["DATABASE_URL", "JWT_ACCESS_SECRET", "JWT_POMPISTE_SECRET"];
+  const manquantes = requises.filter((nom) => !process.env[nom]);
+  if (manquantes.length > 0) {
+    throw new Error(`Variables d'environnement obligatoires manquantes : ${manquantes.join(", ")}`);
+  }
+}
+
 async function bootstrap() {
+  verifierVariablesObligatoires();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // En-têtes de sécurité de base (X-Content-Type-Options, X-Frame-Options,
