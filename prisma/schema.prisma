@@ -176,6 +176,14 @@ model Station {
   quartNuitDebut  String @default("22:00")
   quartNuitFin    String @default("06:00")
 
+  // Informations publiques, exposées à l'application client EKALI (carte des stations,
+  // « stations à proximité ») — voir IntegrationsModule. Coordonnées GPS en degrés décimaux.
+  latitude         Decimal? @db.Decimal(9, 6)
+  longitude        Decimal? @db.Decimal(9, 6)
+  telephone        String?
+  horaireOuverture String   @default("06:00")
+  horaireFermeture String   @default("22:00")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

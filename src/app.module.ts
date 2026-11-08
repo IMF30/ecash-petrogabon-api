@@ -18,6 +18,7 @@ import { PompisteAuthModule } from "./pompiste-auth/pompiste-auth.module";
 import { PompisteModule } from "./pompiste/pompiste.module";
 import { StockModule } from "./stock/stock.module";
 import { ApprovisionnementModule } from "./approvisionnement/approvisionnement.module";
+import { IntegrationsModule } from "./integrations/integrations.module";
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ApprovisionnementModule } from "./approvisionnement/approvisionnement.m
     PompisteModule,
     StockModule,
     ApprovisionnementModule,
+    IntegrationsModule,
   ],
 })
 export class AppModule {}

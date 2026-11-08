@@ -109,6 +109,25 @@ export class StockService {
     return parStation.flat();
   }
 
+  // Disponibilité de chaque produit d'une station, pour l'application client EKALI
+  // (IntegrationsModule). Même calcul que GET /stock, mais SANS les quantités :
+  // seul un état est exposé à l'extérieur.
+  //  - inconnu    : aucun jaugeage n'a encore été saisi pour ce produit
+  //  - rupture    : stock théorique nul ou négatif
+  //  - faible     : stock sous le seuil d'alerte réglé par la gérante
+  //  - disponible : sinon
+  async disponibiliteStation(stationId: string) {
+    const stocks = await Promise.all(PRODUITS_STOCK.map((produit) => this.calculerStockProduit(stationId, produit)));
+    return stocks.map((st) => {
+      let etat: "inconnu" | "rupture" | "faible" | "disponible";
+      if (!st.dernierReleve) etat = "inconnu";
+      else if (st.stockActuel <= 0) etat = "rupture";
+      else if (st.seuil != null && st.stockActuel <= st.seuil) etat = "faible";
+      else etat = "disponible";
+      return { produit: st.produit, etat, dernierReleve: st.dernierReleve?.date ?? null };
+    });
+  }
+
   // Stock théorique à jour = dernier jaugeage de ce produit − ventes depuis ce relevé + quantités
   // des commandes LIVREE (réception confirmée par la gérante — "Traitée" par le GRC ne suffit pas,
   // voir ApprovisionnementService.livrer) reçues depuis. Sans jaugeage antérieur, on part de 0 —

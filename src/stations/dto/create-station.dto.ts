@@ -1,7 +1,8 @@
 import { IsEnum, IsOptional, IsString } from "class-validator";
 import { StatutStation } from "@prisma/client";
+import { StationInfosPubliquesDto } from "./station-infos-publiques";
 
-export class CreateStationDto {
+export class CreateStationDto extends StationInfosPubliquesDto {
   @IsString() code!: string;
   @IsString() nom!: string;
   @IsString() ville!: string;
