@@ -12,6 +12,7 @@ import { ModifierVersementDto } from "./dto/modifier-versement.dto";
 import { ReassignerPompeDto } from "./dto/reassigner-pompe.dto";
 import { genererCodesPinUniques } from "../attendants/pin-generator";
 import { JwtPayload } from "../auth/types";
+import { stationScope } from "../common/station-scope";
 
 /**
  * Forme minimale d'acteur acceptée par enregistrerVersement : un JwtPayload (Gérante/
@@ -75,7 +76,7 @@ export class CashEntriesService {
   findAll(stationId: string | undefined, actor: JwtPayload) {
     // Une GERANTE ne voit que les encaissements de sa propre station : le paramètre
     // stationId reçu est ignoré à son profit pour empêcher la lecture d'une autre station.
-    const scopedStationId = actor.role === "GERANTE" ? (actor.stationId ?? undefined) : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     return this.prisma.cashEntry.findMany({
       // Les quarts EN_COURS sont exclus de la liste "historique" par défaut : ils n'ont
       // pas encore de billetage/TPE/écart réels, et n'ont rien à faire mélangés aux
@@ -89,7 +90,7 @@ export class CashEntriesService {
 
   /** Quarts actuellement ouverts (cash physique en cours de constitution) — vue temps réel Trésorerie/Contrôle Interne. */
   findEnCours(stationId: string | undefined, actor: JwtPayload) {
-    const scopedStationId = actor.role === "GERANTE" ? (actor.stationId ?? undefined) : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     return this.prisma.cashEntry.findMany({
       where: { statut: "EN_COURS", ...(scopedStationId ? { stationId: scopedStationId } : {}) },
       include: INCLUDE_COMPLET,

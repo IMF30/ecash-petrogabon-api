@@ -5,7 +5,7 @@
   "scripts": {
     "postinstall": "prisma generate",
     "build": "nest build",
-    "start": "node dist/main.js",
+    "start": "prisma migrate deploy && node dist/main.js",
     "dev": "nest start --watch",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -27,6 +27,10 @@
     "prisma": "^6.2.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
+  },
+  "overrides": {
+    "effect": "^3.22.5",
+    "deepmerge-ts": "^8.0.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",

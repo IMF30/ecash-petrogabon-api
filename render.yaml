@@ -4,4 +4,5 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install && npx prisma generate && npm run build
-    startCommand: npx prisma migrate deploy && npm run start
+    # "npm run start" applique lui-même les migrations (cf. package.json).
+    startCommand: npm run start

@@ -5,6 +5,7 @@ import { AuditService } from "../audit/audit.service";
 import { PricesService } from "../prices/prices.service";
 import { CreateCommandeDto } from "./dto/create-commande.dto";
 import { JwtPayload } from "../auth/types";
+import { stationScope } from "../common/station-scope";
 import { assertQuantiteRaisonnable } from "../common/produit-stock-limits";
 
 const INCLUDE_COMPLET = {
@@ -47,7 +48,7 @@ export class ApprovisionnementService {
 
   findCommandes(stationId: string | undefined, statut: string | undefined, actor: JwtPayload) {
     // Une GERANTE ne voit que les commandes de sa propre station, comme pour les versements.
-    const scopedStationId = actor.role === "GERANTE" ? (actor.stationId ?? undefined) : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     const statutValide =
       statut === "EN_COURS" || statut === "TRAITEE" || statut === "LIVREE" ? (statut as StatutCommande) : undefined;
 

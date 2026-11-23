@@ -4,6 +4,15 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { CreateDepositDto } from "./dto/create-deposit.dto";
 import { JwtPayload } from "../auth/types";
+import { stationScope } from "../common/station-scope";
+
+// Seules coupures FCFA acceptées (même catalogue que ecash-app/src/lib/denominations.ts) —
+// sans ce contrôle, n'importe quelle « valeur faciale » (ex. 7 431,5) était acceptée et
+// figurait telle quelle sur le bordereau et dans le billetage officiel du versement.
+const COUPURES_VALIDES: Record<"BILLET" | "PIECE", readonly number[]> = {
+  BILLET: [10000, 5000, 2000, 1000, 500],
+  PIECE: [500, 200, 100, 50, 25],
+};
 
 function fcfa(n: number): string {
   return new Intl.NumberFormat("fr-FR").format(n) + " FCFA";
@@ -33,7 +42,7 @@ export class DepositsService {
   findDeposits(stationId: string | undefined, actor: JwtPayload) {
     // Une GERANTE ne voit que les versements de sa propre station : le paramètre
     // stationId reçu est ignoré à son profit pour empêcher la lecture d'une autre station.
-    const scopedStationId = actor.role === "GERANTE" ? (actor.stationId ?? undefined) : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     return this.prisma.deposit.findMany({
       where: scopedStationId ? { stationId: scopedStationId } : undefined,
       include: INCLUDE_COMPLET,
@@ -116,6 +125,13 @@ export class DepositsService {
     });
     if (doublon) {
       throw new ConflictException(`Le bordereau ${dto.numeroBordereau} a déjà été enregistré pour ${bank.nom}.`);
+    }
+
+    const coupureInvalide = dto.denominations.find((d) => !COUPURES_VALIDES[d.type]?.includes(d.valeurFaciale));
+    if (coupureInvalide) {
+      throw new BadRequestException(
+        `Coupure invalide : ${coupureInvalide.type === "BILLET" ? "billet" : "pièce"} de ${coupureInvalide.valeurFaciale} FCFA.`,
+      );
     }
 
     // Montant du versement = somme des dénominations (billets/pièces) saisies, valeur faciale × quantité.

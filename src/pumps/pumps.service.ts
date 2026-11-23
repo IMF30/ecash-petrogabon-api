@@ -5,6 +5,7 @@ import { describeChanges } from "../common/describe-changes";
 import { CreatePumpDto } from "./dto/create-pump.dto";
 import { UpdatePumpDto } from "./dto/update-pump.dto";
 import { JwtPayload } from "../auth/types";
+import { stationRequise, stationScope } from "../common/station-scope";
 
 @Injectable()
 export class PumpsService {
@@ -15,7 +16,7 @@ export class PumpsService {
 
   findAll(stationId: string | undefined, actor: JwtPayload) {
     // Une GERANTE est cantonnée à sa propre station, quel que soit le stationId demandé.
-    const scopedStationId = actor.role === "GERANTE" ? actor.stationId ?? undefined : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     return this.prisma.pump.findMany({
       where: scopedStationId ? { stationId: scopedStationId } : undefined,
       orderBy: { code: "asc" },
@@ -24,7 +25,7 @@ export class PumpsService {
 
   async create(dto: CreatePumpDto, actor: JwtPayload) {
     // GERANTE : la station cible est imposée, pas celle envoyée dans le corps de la requête.
-    const stationId = actor.role === "GERANTE" ? actor.stationId ?? dto.stationId : dto.stationId;
+    const stationId = stationRequise(actor, dto.stationId);
 
     const distributeur = await this.prisma.distributeur.findUnique({ where: { id: dto.distributeurId } });
     if (!distributeur || distributeur.stationId !== stationId) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, ParseEnumPipe, Post, Query, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { ErrorLogSource } from "@prisma/client";
 import { ErrorLogsService } from "./error-logs.service";
@@ -16,8 +16,11 @@ export class ErrorLogsController {
 
   @Get()
   @Roles("ADMINISTRATEUR")
-  findAll(@Query("source") source?: ErrorLogSource, @Query("search") search?: string) {
-    return this.errorLogsService.findAll({ source, search });
+  findAll(
+    @Query("source", new ParseEnumPipe(ErrorLogSource, { optional: true })) source?: ErrorLogSource,
+    @Query("search") search?: string,
+  ) {
+    return this.errorLogsService.findAll({ source, search: typeof search === "string" ? search : undefined });
   }
 
   /**

@@ -21,6 +21,25 @@ function verifierVariablesObligatoires() {
   if (manquantes.length > 0) {
     throw new Error(`Variables d'environnement obligatoires manquantes : ${manquantes.join(", ")}`);
   }
+  // Un secret JWT court (ou laissé à "CHANGE_ME" depuis .env.example) se casse par force brute
+  // hors ligne à partir d'un seul jeton intercepté, ce qui permet de forger un jeton
+  // Administrateur. On refuse de démarrer en production avec un secret faible.
+  if (process.env.NODE_ENV === "production") {
+    const faibles = ["JWT_ACCESS_SECRET", "JWT_POMPISTE_SECRET"].filter(
+      (nom) => (process.env[nom] ?? "").length < 32 || process.env[nom] === "CHANGE_ME",
+    );
+    if (faibles.length > 0) {
+      throw new Error(`Secrets trop faibles (32 caractères minimum) : ${faibles.join(", ")}`);
+    }
+    if (process.env.JWT_ACCESS_SECRET === process.env.JWT_POMPISTE_SECRET) {
+      throw new Error("JWT_ACCESS_SECRET et JWT_POMPISTE_SECRET doivent être différents.");
+    }
+    if ((process.env.INTERNAL_PROXY_SECRET ?? "").length < 32) {
+      console.warn(
+        "INTERNAL_PROXY_SECRET absent ou trop court : la limite de tentatives de connexion sera partagée par tous les utilisateurs passant par le frontend.",
+      );
+    }
+  }
 }
 
 async function bootstrap() {
@@ -33,18 +52,16 @@ async function bootstrap() {
   // désactivée pour éviter de casser des réponses ou outils qui n'en ont pas besoin.
   app.use(helmet({ contentSecurityPolicy: false }));
 
-  // En production, l'API tourne derrière plusieurs sauts de proxy (Cloudflare
-  // puis le load-balancer de Render) — le nombre exact varie et n'est pas
-  // documenté. "1" (un seul saut de confiance) s'est révélé insuffisant en
-  // conditions réelles : req.ip retombait sur l'IP d'un proxy intermédiaire,
-  // différente selon le nœud qui traite la requête, ce qui dispersait les
-  // requêtes d'un même client sur plusieurs compteurs de débit au lieu d'un
-  // seul (vérifié : x-ratelimit-remaining variait de façon incohérente entre
-  // requêtes successives). `true` fait confiance à toute la chaîne devant
-  // l'appli et retient l'IP la plus à gauche de X-Forwarded-For (le client
-  // d'origine) — sûr ici car seuls Cloudflare et Render se trouvent entre
-  // l'internet et ce conteneur, aucun n'est contrôlable par un attaquant.
-  app.set("trust proxy", true);
+  // Nombre FIXE de proxys de confiance devant l'API (1 = le frontal d'Azure App Service).
+  // L'ancienne valeur `true` retenait l'entrée la plus à gauche de X-Forwarded-For — or les
+  // proxys AJOUTENT à cet en-tête sans effacer ce que le client a envoyé : un attaquant
+  // pouvait donc choisir lui-même son « IP » à chaque requête et contourner la limite de
+  // 5 tentatives de connexion par minute. Avec un nombre fixe de sauts, Express retient
+  // l'adresse ajoutée par le dernier proxy de confiance, non falsifiable.
+  // Le trafic relayé par le serveur Next.js est identifié autrement (en-tête secret,
+  // voir common/client-ip-throttler.guard.ts).
+  const hops = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+  app.set("trust proxy", Number.isInteger(hops) && hops >= 0 ? hops : 1);
 
   // Nécessaire pour lire request.cookies.access_token dans JwtAuthGuard
   // (le cookie httpOnly est posé par le proxy Next.js, pas par cette API).

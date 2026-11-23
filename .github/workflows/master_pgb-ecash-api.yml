@@ -12,35 +12,32 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Set up Node.js version
-      uses: actions/setup-node@v1
+      uses: actions/setup-node@v4
       with:
-        node-version: '22.x'
-    
+        # Doit correspondre au runtime de l'App Service (NODE|24-lts) : les dépendances sont
+        # installées ici puis déployées telles quelles.
+        node-version: '24.x'
+
     - name: npm install, build, and test
       run: |
-        npm install
+        npm ci
         npm run build --if-present
         npm run test --if-present
 
-    # Les migrations (prisma/migrations/*) n'étaient jamais appliquées à la base de
-    # production par ce pipeline — seul `npm install` tournait (postinstall: prisma
-    # generate, qui régénère le client mais ne touche pas le schéma réel en base).
-    # Le code déployé pouvait donc s'attendre à des colonnes/tables absentes de la
-    # vraie base. Nécessite un secret de dépôt `DATABASE_URL` pointant vers la base
-    # Postgres de production (Settings → Secrets and variables → Actions).
-    - name: Appliquer les migrations Prisma à la base de production
-      run: npx prisma migrate deploy
-      env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    # Migrations Prisma : appliquées au DÉMARRAGE de l'App Service (script "start" de
+    # package.json : prisma migrate deploy && node dist/main.js), et non plus ici. Les lancer
+    # depuis GitHub Actions obligeait à ouvrir le port Postgres de la VM à tout Internet (les
+    # runners GitHub n'ont pas d'IP fixe) et à stocker le mot de passe de la base dans GitHub.
+    # La base n'a plus à accepter que les IP sortantes de pgb-ecash-api.
 
     - name: 'Deploy to Azure Web App'
-      uses: azure/webapps-deploy@v2
-      with: 
+      uses: azure/webapps-deploy@v3
+      with:
         app-name: 'pgb-ecash-api'
         slot-name: 'production'
         publish-profile: ${{ secrets.AzureAppService_PublishProfile_49631716a83448aeb78117fe66602bec }}

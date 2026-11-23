@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD } from "@nestjs/core";
-import { ThrottlerGuard } from "@nestjs/throttler";
 import { ErrorLogsModule } from "../error-logs/error-logs.module";
+import { ClientIpThrottlerGuard } from "./client-ip-throttler.guard";
 import { ErrorLoggingFilter } from "./filters/error-logging.filter";
 
 // Filtre d'exception global : capture les erreurs serveur inattendues (5xx, bugs non gérés)
@@ -15,7 +15,8 @@ import { ErrorLoggingFilter } from "./filters/error-logging.filter";
   imports: [ErrorLogsModule],
   providers: [
     { provide: APP_FILTER, useClass: ErrorLoggingFilter },
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Clé = IP réelle du client final, voir ClientIpThrottlerGuard.
+    { provide: APP_GUARD, useClass: ClientIpThrottlerGuard },
   ],
 })
 export class CommonModule {}

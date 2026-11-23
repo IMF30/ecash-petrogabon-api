@@ -8,6 +8,7 @@ import { UpdateAttendantDto } from "./dto/update-attendant.dto";
 import { SetPinDto } from "./dto/set-pin.dto";
 import { genererCodesPinUniques } from "./pin-generator";
 import { JwtPayload } from "../auth/types";
+import { stationRequise, stationScope } from "../common/station-scope";
 
 @Injectable()
 export class AttendantsService {
@@ -19,7 +20,7 @@ export class AttendantsService {
   findAll(stationId: string | undefined, actor: JwtPayload) {
     // Une GERANTE ne voit que sa propre station : le paramètre stationId reçu est ignoré
     // à son profit pour empêcher un accès aux pompistes d'une autre station via la query string.
-    const scopedStationId = actor.role === "GERANTE" ? actor.stationId ?? undefined : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     return this.prisma.attendant.findMany({
       where: scopedStationId ? { stationId: scopedStationId } : undefined,
       orderBy: { nom: "asc" },
@@ -38,7 +39,7 @@ export class AttendantsService {
   async create(dto: CreateAttendantDto, actor: JwtPayload) {
     // Même règle qu'au-dessus : la station de la GERANTE prime sur celle du corps de la requête,
     // pour qu'elle ne puisse pas créer un pompiste rattaché à une autre station.
-    const stationId = actor.role === "GERANTE" ? actor.stationId ?? dto.stationId : dto.stationId;
+    const stationId = stationRequise(actor, dto.stationId);
     const created = await this.prisma.attendant.create({
       data: { ...dto, stationId, embauche: new Date(dto.embauche) },
     });

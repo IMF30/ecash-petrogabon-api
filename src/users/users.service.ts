@@ -43,7 +43,17 @@ export class UsersService {
     return user;
   }
 
+  // Une Gérante est par nature rattachée à UNE station : tout le cloisonnement des données
+  // (cf. common/station-scope.ts) repose sur ce rattachement. Un compte Gérante sans station
+  // n'a donc aucun sens métier et est refusé dès sa création/modification.
+  private assertGeranteAvecStation(role: string, stationId: string | null | undefined) {
+    if (role === "GERANTE" && !stationId) {
+      throw new BadRequestException("Un compte Gérante doit obligatoirement être rattaché à une station.");
+    }
+  }
+
   async create(dto: CreateUserDto, actor: JwtPayload) {
+    this.assertGeranteAvecStation(dto.role, dto.stationId);
     const exists = await this.prisma.user.findFirst({
       where: { OR: [{ identifiant: dto.identifiant }, { email: dto.email }] },
     });
@@ -81,6 +91,7 @@ export class UsersService {
 
   async update(id: string, dto: UpdateUserDto, actor: JwtPayload) {
     const before = await this.findOne(id);
+    this.assertGeranteAvecStation(dto.role ?? before.role, dto.stationId !== undefined ? dto.stationId : before.stationId);
 
     // Le système doit toujours conserver au moins un compte Administrateur actif — sans ce
     // garde-fou, un Administrateur pourrait se désactiver ou se rétrograder lui-même (ou un
@@ -112,7 +123,12 @@ export class UsersService {
     // Un mot de passe réinitialisé ou un compte désactivé par l'Administrateur ne
     // doit pas laisser une session déjà ouverte se prolonger indéfiniment via
     // /auth/refresh (ex. employé licencié, compte compromis qu'on vient de sécuriser).
-    if (password || dto.statut === "INACTIF") {
+    // Idem pour un changement de rôle ou de station : le refresh token réémettrait bien un JWT à
+    // jour, mais autant forcer une reconnexion propre avec les nouveaux droits.
+    const droitsModifies =
+      (dto.role !== undefined && dto.role !== before.role) ||
+      (dto.stationId !== undefined && dto.stationId !== before.stationId);
+    if (password || dto.statut === "INACTIF" || droitsModifies) {
       await this.authService.revokeAllForUser(id);
     }
 

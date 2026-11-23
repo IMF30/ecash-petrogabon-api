@@ -5,6 +5,7 @@ import { AuditService } from "../audit/audit.service";
 import { CreateJaugeageDto } from "./dto/create-jaugeage.dto";
 import { UpsertSeuilDto } from "./dto/upsert-seuil.dto";
 import { JwtPayload } from "../auth/types";
+import { stationScope } from "../common/station-scope";
 import { assertQuantiteRaisonnable } from "../common/produit-stock-limits";
 
 const PRODUITS_STOCK: ProduitStock[] = ["ESSENCE", "GASOIL", "PETROLE", "GPL_12_5", "GPL_35"];
@@ -53,14 +54,14 @@ export class StockService {
   // StockController : seul un GRC/RESEAU consulte d'autres stations, via getStock().
   findJaugeages(actor: JwtPayload) {
     return this.prisma.jaugeage.findMany({
-      where: { stationId: actor.stationId ?? undefined },
+      where: { stationId: stationScope(actor, undefined) },
       orderBy: { dateReleve: "desc" },
       take: 200,
     });
   }
 
   async getStock(stationId: string | undefined, actor: JwtPayload) {
-    const scopedStationId = actor.role === "GERANTE" ? (actor.stationId ?? undefined) : stationId;
+    const scopedStationId = stationScope(actor, stationId);
     if (!scopedStationId) throw new BadRequestException("Station requise pour consulter le stock.");
 
     return Promise.all(PRODUITS_STOCK.map((produit) => this.calculerStockProduit(scopedStationId, produit)));

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UnauthorizedException, UseGuards } from "@nestjs/common";
 import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
@@ -35,14 +35,20 @@ export class AuthController {
   // on limite quand même le débit de tentatives de recherche par empreinte en base,
   // en défense en profondeur plutôt que de s'appuyer uniquement sur les 100/min globaux.
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  async refresh(@Body("refreshToken") refreshToken: string) {
+  async refresh(@Body("refreshToken") refreshToken: unknown) {
+    // Corps non validé par un DTO : sans ce contrôle, un objet ou un tableau faisait planter
+    // createHash().update() (erreur 500 journalisée) au lieu d'un simple 401.
+    if (typeof refreshToken !== "string" || refreshToken.length === 0 || refreshToken.length > 200) {
+      throw new UnauthorizedException("Session expirée, veuillez vous reconnecter.");
+    }
     return this.authService.refresh(refreshToken);
   }
 
   @Post("logout")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@Body("refreshToken") refreshToken: string | undefined) {
+  async logout(@Body("refreshToken") refreshToken: unknown) {
+    if (typeof refreshToken !== "string" || refreshToken.length > 200) return;
     await this.authService.logout(refreshToken);
   }
 

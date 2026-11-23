@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from "@nestjs/common";
+import { Controller, Get, ParseEnumPipe, Query, UseGuards } from "@nestjs/common";
 import { CategorieAudit } from "@prisma/client";
 import { AuditService } from "./audit.service";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -15,10 +15,15 @@ export class AuditController {
   @Get()
   @Roles("ADMINISTRATEUR", "CONTROLE_INTERNE")
   async findAll(
-    @Query("categorie") categorie?: CategorieAudit,
+    @Query("categorie", new ParseEnumPipe(CategorieAudit, { optional: true })) categorie?: CategorieAudit,
     @Query("stationId") stationId?: string,
     @Query("search") search?: string,
   ) {
-    return this.auditService.findAll({ categorie, stationId, search });
+    // ?search=a&search=b arrive sous forme de tableau et faisait planter la requête Prisma (500).
+    return this.auditService.findAll({
+      categorie,
+      stationId: typeof stationId === "string" ? stationId : undefined,
+      search: typeof search === "string" ? search : undefined,
+    });
   }
 }

@@ -4,6 +4,12 @@ import * as argon2 from "argon2";
 const prisma = new PrismaClient();
 
 async function main() {
+  // Ce seed crée des comptes de démonstration (dont un ADMINISTRATEUR) avec un mot de passe
+  // publié dans le code source. Lancé par erreur sur la base de production, il ouvrirait un
+  // accès administrateur à quiconque a lu ce fichier : refus explicite hors développement.
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") {
+    throw new Error("Seed de démonstration refusé en production (définir ALLOW_DEMO_SEED=true pour forcer).");
+  }
   console.log("Seed : stations...");
   const pk8 = await prisma.station.upsert({
     where: { code: "PK8" },
@@ -108,7 +114,8 @@ async function main() {
     await prisma.user.upsert({
       where: { identifiant: u.identifiant },
       update: {},
-      create: { ...u, passwordHash: motDePasseDemo },
+      // Mot de passe connu de tous : changement obligatoire dès la première connexion.
+      create: { ...u, passwordHash: motDePasseDemo, mustChangePassword: true },
     });
   }
 
